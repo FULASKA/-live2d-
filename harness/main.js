@@ -282,6 +282,57 @@ function introspect() {
     const blended = drawIds.filter((_, i) => (cm.getDrawableBlendMode?.(i) ?? 0) !== 0).length
     pushLog('inspect', `遮罩网格 ${masked}/${drawIds.length}（反相 ${inverted}）· 非普通混合 ${blended}`)
     state.inspect.masked = masked
+
+    // 贴图索引越界 = 无贴图网格 = 纯色方块（不同内核会渲染成黑或白）
+    const texIdx = drawIds.map((_, i) => { try { return cm.getDrawableTextureIndices(i) } catch { return -1 } })
+    const maxTex = Math.max(...texIdx)
+    const oob = texIdx.filter((t) => t >= tex.length).length
+    const dist = {}
+    for (const t of texIdx) dist[t] = (dist[t] || 0) + 1
+    pushLog('inspect', `贴图索引 max=${maxTex} 越界网格=${oob} 分布=${JSON.stringify(dist)} 已加载=${tex.length}`)
+    state.inspect.maxTex = maxTex; state.inspect.oob = oob
+    const oobIds = drawIds.filter((_, i) => texIdx[i] >= tex.length)
+    if (oobIds.length) pushLog('inspect', '越界网格: ' + oobIds.slice(0, 12).join(' '))
+
+    // UV 退化检查：整块网格只采样一个像素 → 纯色方块
+    const degenerate = []
+    for (let i = 0; i < drawIds.length; i++) {
+      try {
+        const uv = cm.getDrawableVertexUvs(i)
+        if (!uv || uv.length < 4) continue
+        let uMin = 9, uMax = -9, vMin = 9, vMax = -9
+        for (let k = 0; k < uv.length; k += 2) {
+          uMin = Math.min(uMin, uv[k]); uMax = Math.max(uMax, uv[k])
+          vMin = Math.min(vMin, uv[k + 1]); vMax = Math.max(vMax, uv[k + 1])
+        }
+        const spread = Math.max(uMax - uMin, vMax - vMin)
+        const op = cm.getDrawableOpacity(i)
+        if (spread < 1e-4 && op > 0.01) degenerate.push(`${drawIds[i]}(op=${op.toFixed(2)},uv=${uMin.toFixed(4)},${vMin.toFixed(4)})`)
+      } catch {}
+    }
+    pushLog('inspect', `UV 退化网格 ${degenerate.length}${degenerate.length ? ': ' + degenerate.slice(0, 8).join(' ') : ''}`)
+    state.inspect.degenerate = degenerate.length
+
+    // 乘法色 / 滤色（Cubism 4.2+）：渲染器不认的话，阴影变黑块、瞳孔变白圈
+    if (cm.getDrawableMultiplyColor) {
+      let nonWhite = 0
+      const samples = []
+      for (let i = 0; i < drawIds.length; i++) {
+        try {
+          const m = cm.getDrawableMultiplyColor(i)
+          if (!m) continue
+          const [r, g, b] = [m[0], m[1], m[2]]
+          if (r < 0.99 || g < 0.99 || b < 0.99) {
+            nonWhite++
+            if (samples.length < 6) samples.push(`${drawIds[i]}(${r.toFixed(2)},${g.toFixed(2)},${b.toFixed(2)})`)
+          }
+        } catch {}
+      }
+      pushLog('inspect', `非白乘法色网格 ${nonWhite}/${drawIds.length}${samples.length ? ': ' + samples.join(' ') : ''}`)
+      state.inspect.multiply = nonWhite
+    } else {
+      pushLog('inspect', '该内核不暴露乘法色 API')
+    }
   } catch (e) { pushLog('warn', '遮罩内省失败: ' + e.message) }
 }
 
