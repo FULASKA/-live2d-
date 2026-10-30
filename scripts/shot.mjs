@@ -121,7 +121,7 @@ const main = async () => {
     }, EVAL_SRC)
 
     mkdirSync(path.dirname(OUT), { recursive: true })
-    await page.screenshot({ path: OUT })
+    await page.screenshot({ path: OUT, omitBackground: process.argv.includes("--omit-background") })
 
     console.log(JSON.stringify({ ok: probe.status === 'ready', status, probe, logs: logs.slice(-40) }, null, 2))
     if (probe.status !== 'ready') process.exitCode = 1

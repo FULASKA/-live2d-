@@ -65,6 +65,7 @@ async function createWindow() {
     resizable: false,
     hasShadow: false,
     backgroundColor: '#00000000',
+    icon: path.join(ROOT, 'assets', 'app.ico'),
     show: false,
     webPreferences: {
       preload: path.join(ROOT, 'app', 'preload.cjs'),
