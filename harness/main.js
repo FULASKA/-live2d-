@@ -247,13 +247,17 @@ function autoSeed(reset = false) {
   drawOverlay()
 }
 
+const BAND_NAMES = ['头', '胸', '腰', '裙摆', '腿', '脚', '尾巴']
+
 function bootRegions() {
   const key = state.caps.model.name
   state.store = createRegionStore([])
   const loaded = state.store.load(key)
-  if (!loaded) {
-    autoSeed(false)
-    state.store.save(key)
+  // 旧档案（旧的五段自动铺）要重铺：缺段说明是上一版自动铺的，不是用户手画的
+  const missing = loaded ? BAND_NAMES.filter((n) => !state.store.all.some((r) => r.name === n)) : BAND_NAMES
+  if (!loaded || missing.length) {
+    autoSeed(true)
+    pushLog('region', `重铺热区（${loaded ? '旧布局缺 ' + missing.join('/') : '首次'}）`)
   } else {
     renderRegions()
     pushLog('region', `读到档案：${state.store.all.length} 个热区`)
@@ -263,11 +267,13 @@ function bootRegions() {
     store: state.store,
     viewport: state.viewport,
     canvas: $('#stage'),
-    // 透明像素 = 穿透：热区几何盖到背景时，点击不该被吃掉
+    // 透明像素 = 穿透：热区几何盖到背景时，点击不该被吃掉。
+    // 读不到像素（gl 异常 / 无头软渲染偶尔为空）时**放行** —— 不能因为采样失败把整块互动锁死。
     isOpaque: (p) => {
       const sp = state.viewport.modelToScreen(p.x, p.y)
       const { alpha } = state.stage.sampleAlpha(sp.x, sp.y)
-      return (alpha ?? 0) > 12
+      if (alpha == null) return true
+      return alpha > 12
     },
     onEvent: onRegionEvent,
   })
@@ -283,6 +289,14 @@ function onRegionEvent(ev) {
       break
     case 'pet':
       if (r && ev.step === 1) applyReaction(r, 'pet')
+      break
+    case 'down':
+      if (r) {
+        // 命中诊断：alpha 是「透明穿透」那一关的判据，点不动时先看这个数
+        const sp = state.viewport.modelToScreen(ev.point.x, ev.point.y)
+        const a = state.stage.sampleAlpha(sp.x, sp.y)
+        pushLog('hit', `按下 ${r.name} · alpha=${a.alpha == null ? 'null' : a.alpha}`)
+      }
       break
     case 'dragStart':
       pushLog('gesture', `${r ? r.name : '背景'} · 拖动（产品里 = 移动窗口 / 区域拖拽，可配）`)
@@ -481,18 +495,27 @@ function drawOverlay() {
     ctx.beginPath()
     trace(r.points)
     for (const h of r.holes || []) trace(h)
-    ctx.fillStyle = on ? 'rgba(120,180,255,0.16)' : 'rgba(120,180,255,0.05)'
+    ctx.fillStyle = on ? 'rgba(120,180,255,0.30)' : 'rgba(120,180,255,0.05)'
     // evenodd：洞（与其它热区的交集）要真的空出来，不是盖上去
     ctx.fill('evenodd')
-    ctx.lineWidth = on ? 2 : 1
-    ctx.strokeStyle = on ? 'rgba(150,200,255,0.95)' : 'rgba(120,170,230,0.5)'
+    ctx.lineWidth = on ? 2.5 : 1
+    ctx.strokeStyle = on ? 'rgba(170,215,255,1)' : 'rgba(120,170,230,0.5)'
+    if (on) { ctx.shadowColor = 'rgba(120,180,255,0.9)'; ctx.shadowBlur = 8 }
     ctx.stroke()
+    ctx.shadowBlur = 0
     const b = r.points.reduce((a, [x, y]) => ({ x: a.x + x, y: a.y + y }), { x: 0, y: 0 })
     const c0 = state.viewport.modelToScreen(b.x / r.points.length, b.y / r.points.length)
-    ctx.fillStyle = on ? '#dbe9ff' : 'rgba(190,215,245,0.75)'
     ctx.font = '11px system-ui'
     ctx.textAlign = 'center'
-    ctx.fillText(r.name, c0.x, c0.y)
+    if (on) {
+      const w = ctx.measureText(r.name).width + 12
+      ctx.fillStyle = 'rgba(10,14,22,0.85)'
+      ctx.beginPath()
+      ctx.roundRect(c0.x - w / 2, c0.y - 9, w, 18, 5)
+      ctx.fill()
+    }
+    ctx.fillStyle = on ? '#e8f2ff' : 'rgba(190,215,245,0.75)'
+    ctx.fillText(r.name, c0.x, c0.y + 4)
   }
 
   if (state.editor.points.length) {

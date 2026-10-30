@@ -311,11 +311,17 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
    * 热区是矩形/凸包，边界必然盖到透明背景；规格要求落在透明处算穿透，
    * 所以这里用引擎的 alpha 采样兜底（只在按下这种低频时机做，不进移动路径）。
    */
-  const hitAt = (clientX, clientY) => {
+  /**
+   * 命中判定。
+   * - 悬停（hover）只做几何命中：高亮要「指哪亮哪」，不该被像素采样卡掉；
+   *   而且读像素要先渲染一帧，放进移动路径会把帧率拖死。
+   * - 按下（down）才过「不透明像素」这一关：落在透明处视为穿透（规格要求）。
+   */
+  const hitAt = (clientX, clientY, { gate = false } = {}) => {
     const p = modelPoint(clientX, clientY)
     let region = store.hit(p.x, p.y)
     let opaque = true
-    if (region && isOpaque) {
+    if (region && gate && isOpaque) {
       opaque = isOpaque(p)
       if (!opaque) region = null
     }
@@ -354,9 +360,10 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
   }
 
   const onPointerDown = (e) => {
-    const { p, region } = hitAt(e.clientX, e.clientY)
+    const { p, region } = hitAt(e.clientX, e.clientY, { gate: true })
     pressed = { region, regionId: region?.id, start: p, last: p, moved: 0, t0: performance.now(), petSteps: 0, dragging: false, pointerId: e.pointerId }
-    canvas?.setPointerCapture?.(e.pointerId)
+    // 合成事件（测试/无头）里 pointerId 不是活跃指针，capture 会抛 —— 拦掉，别让后续逻辑断链
+    try { canvas?.setPointerCapture?.(e.pointerId) } catch {}
     emit('down', { region, point: p })
   }
 
@@ -376,7 +383,7 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
     if (kind === 'tap') emit('tap', { region, point: pressed.start })
     else if (kind === 'pet') emit('petEnd', { region, steps: pressed.petSteps })
     else emit('dragEnd', { region, moved: pressed.moved })
-    canvas?.releasePointerCapture?.(pressed.pointerId)
+    try { canvas?.releasePointerCapture?.(pressed.pointerId) } catch {}
     pressed = null
   }
 
