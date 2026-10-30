@@ -8,15 +8,15 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 
 /* 右键唤出的工具条：角色铺满窗口后，✥ 是唯一的「搬窗口」入口 */
 #tools {
-  position: fixed; display: flex; gap: 6px; padding: 6px;
+  position: fixed; right: 8px; top: 8px; display: flex; gap: 6px; padding: 5px;
   background: rgba(16, 19, 26, 0.92); border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 22px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  border-radius: 12px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(12px); z-index: 30;
 }
 #tools.hidden { display: none; }
 #tools .tool {
-  width: 34px; height: 34px; border-radius: 17px; border: 1px solid rgba(255, 255, 255, 0.12);
-  background: #151a24; color: #dbe7f7; font-size: 15px; line-height: 1; cursor: pointer;
+  height: 28px; min-width: 54px; padding: 0 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #151a24; color: #dbe7f7; font: 12px/1 system-ui, sans-serif; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
 #tools .tool:hover { border-color: rgba(120, 180, 255, 0.7); color: #fff; }

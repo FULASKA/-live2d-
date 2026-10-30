@@ -53,6 +53,7 @@ async function main() {
     bootRegions()
     bindPanel()
     bindWindowDrag()
+    bindToolsDismiss()
     bindResizeHandles()
     bindReactionEditor()
     bindPassThrough()
@@ -130,7 +131,12 @@ async function bootStage() {
   const viewport = createViewport({ model: stage.model, app: stage.app })
   state.viewport = viewport
   viewport.observe($('#stage'))
-  viewport.set({ zoom: Number(state.settings.zoom) || 1 })
+  const clampOff = (v) => Math.max(-1.5, Math.min(1.5, Number(v) || 0))
+  viewport.set({
+    zoom: Number(state.settings.zoom) || 1,
+    offsetX: clampOff(state.settings.offsetX),
+    offsetY: clampOff(state.settings.offsetY),
+  })
 
   // 窗口坐标为「客户端像素」，窗口外的点会是负数/越界值，正是我们要的方向。
   // 参考半径按「半个屏幕」给，所以鼠标跑到窗口外、桌面任何角落都有明确方向感。
@@ -149,6 +155,12 @@ async function bootStage() {
 
   window.addEventListener('pointermove', (e) => {
     lookFromClient(e.clientX, e.clientY)
+    // 抚摸中的位移（客户端像素）→ 头摆
+    const lastC = state.lastClient
+    state.lastClient = { x: e.clientX, y: e.clientY }
+    if (state.petArmed && lastC) {
+      state.petSway?.move(e.clientX - lastC.x, e.clientY - lastC.y, window.innerWidth, window.innerHeight)
+    }
   })
   // 桌面级跟随：主进程持续读全局光标位置，窗口外也能看过去
   shell.onCursor?.((p) => lookFromClient(p.x, p.y))
@@ -217,10 +229,17 @@ function bootRegions() {
     onEvent: (ev) => {
       const name = ev.region?.name
       if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
-      if (ev.type === 'pet' && name) {
-        // 反应只在第一步触发（否则每组会反复重建）；晃动每一步都续，才是「跟着滑动在晃」
-        if (name !== '脸' && ev.step === 1) state.reactions.apply(ev.region, 'pet')
-        state.petSway?.trigger(name)
+      if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) state.reactions.apply(ev.region, 'pet')
+      // 只有头会「跟着手摆」：按下起记位移，滑动按 50% 转成角度；其它部位不再弹
+      if (name === '头') {
+        if (ev.type === 'down' || (ev.type === 'pet' && !state.petArmed)) {
+          state.petArmed = true
+          state.lastClient = null
+          state.petSway?.start('头')
+        } else if (ev.type === 'up' || ev.type === 'petEnd') {
+          state.petArmed = false
+          state.petSway?.release()
+        }
       }
       // 捏脸：按住脸拖 → 鼓脸
       if (name === '脸') {
@@ -228,11 +247,7 @@ function bootRegions() {
         else if (ev.type === 'dragMove') state.facePinch?.move(ev.dx || 0, ev.dy || 0)
         else if (ev.type === 'up') { state.facePinch?.release(); pinchExpressions(false) }
       }
-      // 手在哪，晃动就往哪偏（模型画布坐标 → 归一化 -1..1）
-      if (ev.point && (ev.type === 'move' || ev.type === 'pet' || ev.type === 'down')) {
-        const c = state.stage.modelSize()
-        state.petSway?.point((ev.point.x / c.width) * 2 - 1, (ev.point.y / c.height) * 2 - 1)
-      }
+      // 手在哪的偏摆已废弃：现在由 pointermove 的位移驱动（见上方 petArmed）
     },
   })
   state.regionInput.attach($('#stage'))
@@ -359,12 +374,14 @@ function bindPassThrough() {
   // 验证钩子（和 harness 里的 __reaction 一样，只为无头检查）
   window.__layout = () => ({
     win: [window.innerWidth, window.innerHeight],
+    pos: [Math.round(window.screenX), Math.round(window.screenY)],
     offsetX: state.viewport?.view.offsetX ?? null,
     model: state.stage ? [Math.round(state.stage.model.position.x), Math.round(state.stage.model.position.y)] : null,
     gaze: state.gaze?.state?.().target ?? null,
     gazeLast: window.__gazeLast || null,
     sway: state.petSway?.state?.() ?? null,
     angles: state.stage ? ['ParamAngleX', 'ParamAngleY', 'ParamAngleZ'].map((id) => Math.round(state.stage.param.get(id) * 10) / 10) : null,
+    lean: state.stage ? Math.round(state.stage.param.get('LeanInput') * 10) / 10 : null,
   })
   window.__pass = {
     bodyAt,
@@ -387,6 +404,30 @@ function bindPassThrough() {
       }
     },
     regions: () => (state.store?.all || []).map((r) => ({ name: r.name, z: r.z })),
+    leanState: () => {
+      const def = (state.caps?.expressions || []).find((x) => x.name === '前倾')
+      const keys = def ? Object.keys(def.params) : []
+      return {
+        def: def ? def.params : null,
+        active: !!state.layers?.hasExpression?.('前倾'),
+        values: keys.map((k) => [k, state.stage?.param.get(k), state.stage?.param.info(k)?.min, state.stage?.param.info(k)?.max]),
+      }
+    },
+    tryLean: () => triggerLean(),
+    regionDebug: (x, y) => {
+      const p = state.viewport.clientToModel(x, y)
+      const rows = (state.store?.all || []).map((r) => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const [px, py] of r.points || []) {
+          if (px < minX) minX = px
+          if (px > maxX) maxX = px
+          if (py < minY) minY = py
+          if (py > maxY) maxY = py
+        }
+        return { name: r.name, z: r.z, minX: Math.round(minX), minY: Math.round(minY), maxX: Math.round(maxX), maxY: Math.round(maxY) }
+      })
+      return { model: { x: Math.round(p.x), y: Math.round(p.y) }, rows }
+    },
     zoom: (z) => state.viewport.set({ zoom: z }),
     pinchTest: (dx, dy) => { state.facePinch.grab(); state.facePinch.move(dx, dy) },
     pinchReset: () => state.facePinch.release(),
@@ -551,23 +592,96 @@ function setPanelExpanded(open) {
 
 function bindWindowDrag() {
   const stage = $('#stage')
-  // 角色铺满窗口后，角色身上几乎处处是热区：空白处拖动 + ✥ 手柄 + 面板标题栏，三条路都能搬
+  // 左键按住角色拖 = 搬窗口（按在分区上不算）；中键另有一套（见 bindMiddleDrag）
   dragWindow(stage, { canStart: (e) => !state.regionInput?.pressed?.region && bodyAt(e.clientX, e.clientY) })
-  dragWindow($('#tool-move'))
-  stage.addEventListener('pointerdown', () => hideTools())
+  bindMiddleDrag(stage)
 }
 
-// ---------- 右键工具条（✥ 搬窗口 / ⚙ 设置 / × 收起） ----------
-function showTools(x, y) {
-  const t = $('#tools')
-  t.classList.remove('hidden')
-  const r = t.getBoundingClientRect()
-  const left = Math.min(Math.max(8, x - r.width / 2), window.innerWidth - r.width - 8)
-  const top = Math.min(Math.max(8, y - r.height - 14), window.innerHeight - r.height - 8)
-  t.style.left = `${Math.round(left)}px`
-  t.style.top = `${Math.round(top)}px`
+/**
+ * 中键拖动：
+ *   - 设置面板关着 → 搬窗口
+ *   - 设置面板开着 → 把角色在窗口里挪（改模型偏移，等于调「角色相对界面的位置」）
+ * 偏移在松手时写进 settings，下次启动直接还原。
+ */
+function bindMiddleDrag(stage) {
+  let st = null
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 1) return
+    e.preventDefault()
+    hideTools()
+    const panelOpen = !$('#panel').classList.contains('hidden')
+    const v = state.viewport.view
+    st = {
+      mode: panelOpen ? 'model' : 'window',
+      x: e.screenX,
+      y: e.screenY,
+      o: { offsetX: v.offsetX, offsetY: v.offsetY },
+    }
+    try { stage.setPointerCapture(e.pointerId) } catch {}
+  })
+  stage.addEventListener('pointermove', (e) => {
+    if (!st) return
+    const dx = e.screenX - st.x
+    const dy = e.screenY - st.y
+    if (st.mode === 'window') {
+      if (!dx && !dy) return
+      // 单次位移夹一下：窗口跟着动时若坐标源异常，别让窗口一帧飞出屏幕
+      const stepX = Math.max(-80, Math.min(80, dx))
+      const stepY = Math.max(-80, Math.min(80, dy))
+      shell.moveBy(stepX, stepY)
+      st.x = e.screenX
+      st.y = e.screenY
+      return
+    }
+    const w = Math.max(1, window.innerWidth)
+    const h = Math.max(1, window.innerHeight)
+    state.viewport.set({ offsetX: st.o.offsetX + (2 * dx) / w, offsetY: st.o.offsetY + (2 * dy) / h })
+  })
+  const end = (e) => {
+    if (!st) return
+    const mode = st.mode
+    st = null
+    try { stage.releasePointerCapture(e.pointerId) } catch {}
+    if (mode === 'model') {
+      const v = state.viewport.view
+      shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
+      refreshMask(true)
+    }
+  }
+  stage.addEventListener('pointerup', end)
+  stage.addEventListener('pointercancel', end)
 }
+
+// ---------- 右键弹窗：设置 / 退出（固定窗口右上角，不挡角色） ----------
+function showTools() { $('#tools').classList.remove('hidden') }
 function hideTools() { $('#tools').classList.add('hidden') }
+
+/** 客户端坐标 → 命中的热区 */
+function regionAtClient(x, y) {
+  if (!state.store || !state.viewport) return null
+  const p = state.viewport.clientToModel(x, y)
+  return state.store.hit(p.x, p.y)
+}
+
+/** 头部右键：前倾表情（物理输入参数，写点在 beforePhysics，由 layerStack 自动分流） */
+let leanTimer = 0
+function triggerLean() {
+  const def = (state.caps.expressions || []).find((x) => x.name === '前倾')
+  if (!def) { toast('模型没有「前倾」表情'); return }
+  state.layers.addExpression('前倾', def.params, { source: 'lean' })
+  clearTimeout(leanTimer)
+  leanTimer = setTimeout(() => state.layers.removeSource('lean'), 1100)
+}
+
+/** 点别处关掉弹窗（面板里例外：点面板不该收弹窗） */
+function bindToolsDismiss() {
+  window.addEventListener('pointerdown', (e) => {
+    const t = $('#tools')
+    if (!t || t.classList.contains('hidden')) return
+    if (e.target?.closest?.('#tools')) return
+    hideTools()
+  }, true)
+}
 
 // ---------- 分区反应编辑器 ----------
 // 反应存在热区上（region.reaction），reactions.apply 优先用它，其次才回落到 DEFAULT_REACTIONS。
@@ -660,7 +774,10 @@ function bindPanel() {
 
   window.addEventListener('contextmenu', (e) => {
     e.preventDefault()
-    showTools(e.clientX, e.clientY)
+    // 头部 / 脸部捏脸区右键 = 触发「前倾」，不弹菜单（避免和互动打架）
+    const r = regionAtClient(e.clientX, e.clientY)
+    if (r && (r.name === '头' || r.name === '脸')) { triggerLean(); return }
+    showTools()
   })
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return
@@ -669,7 +786,7 @@ function bindPanel() {
   })
   $('#panel-close').onclick = () => show(false)
   $('#tool-settings').onclick = () => { hideTools(); show(true) }
-  $('#tool-hide').onclick = () => hideTools()
+  $('#tool-quit').onclick = () => shell.quit()
 
   const s = state.settings
   syncSizeReadout()

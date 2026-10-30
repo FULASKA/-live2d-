@@ -17,6 +17,8 @@ const DEFAULT_MODEL = 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大�
 const DEFAULTS = {
   width: 520,
   height: 760,
+  x: null,          // 窗口位置（首次启动按屏幕右上角摆）
+  y: null,
   zoom: 1,
   offsetX: 0,
   offsetY: 0,
@@ -62,8 +64,8 @@ async function createWindow() {
   win = new BrowserWindow({
     width: settings.width,
     height: settings.height,
-    x: workArea ? Math.round(workArea.x + workArea.width - settings.width - 40) : undefined,
-    y: workArea ? Math.round(workArea.y + 40) : undefined,
+    x: Number.isFinite(settings.x) ? Math.round(settings.x) : (workArea ? Math.round(workArea.x + workArea.width - settings.width - 40) : undefined),
+    y: Number.isFinite(settings.y) ? Math.round(settings.y) : (workArea ? Math.round(workArea.y + 40) : undefined),
     transparent: true,
     frame: false,
     resizable: false,
@@ -80,6 +82,17 @@ async function createWindow() {
   })
   win.setBackgroundColor('#00000000')
   win.once('ready-to-show', () => win.show())
+
+  // 位置记忆：搬完窗口 500ms 后落盘（拖动过程中不写，避免每帧 IO）
+  let moveTimer = null
+  win.on('moved', () => {
+    if (!win || win.isDestroyed()) return
+    const [x, y] = win.getPosition()
+    settings.x = x
+    settings.y = y
+    if (moveTimer) clearTimeout(moveTimer)
+    moveTimer = setTimeout(() => { moveTimer = null; saveSettings() }, 500)
+  })
   await win.loadURL(`${srv.url}/app/`)
   applyWindowSettings()
   win.on('closed', () => { win = null })

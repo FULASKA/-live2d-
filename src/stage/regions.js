@@ -435,6 +435,8 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque, 
   }
 
   const onPointerDown = (e) => {
+    // 只认左键：中键是搬窗口/挪角色，不该被当成互动
+    if (e.button !== 0) return
     const { p, region } = hitAt(e.clientX, e.clientY, { gate: true })
     // 起手在热区外时，先看「离角色够不够近」：远处横拖是搬窗口，不该算抚摸
     let nearBody = true
