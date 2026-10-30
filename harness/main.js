@@ -107,6 +107,16 @@ async function bootStage() {
   $('#send-state').onclick = () => sendState($('#state-sel').value)
 }
 
+/** 点是否落在三角形内（同向法） */
+function pointInTri(px, py, ax, ay, bx, by, cx, cy) {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
+  const neg = d1 < 0 || d2 < 0 || d3 < 0
+  const pos = d1 > 0 || d2 > 0 || d3 > 0
+  return !(neg && pos)
+}
+
 /** 可复现的视觉验证钩子：?expr=圈圈眼&motion=2&param=ParamAngleX:20&checker=0 */
 function applyDeepLink() {
   const q = new URLSearchParams(location.search)
@@ -135,7 +145,32 @@ function applyDeepLink() {
     }
     applyHeld(); renderHeld()
   }
-  if (q.get('checker') === '0') $('#stage').classList.remove('checker')
+  // 命中反查：?hit=x,y —— 从屏幕坐标反查是哪个网格盖住了这个点
+  if (q.get('hit')) {
+    const [sx, sy] = q.get('hit').split(',').map(Number)
+    const p = model.toLocal(new window.PIXI.Point(sx, sy))
+    const cm2 = model.internalModel.coreModel
+    const n = cm2.getDrawableCount ? cm2.getDrawableCount() : 0
+    const order = cm2.getDrawableRenderOrders ? cm2.getDrawableRenderOrders() : []
+    const hits = []
+    for (let i = 0; i < n; i++) {
+      const idx = cm2.getDrawableVertexIndices(i)
+      const vtx = model.internalModel.getDrawableVertices(i)
+      if (!idx || !vtx) continue
+      for (let t = 0; t < idx.length; t += 3) {
+        const a = idx[t] * 2, b = idx[t + 1] * 2, c = idx[t + 2] * 2
+        if (pointInTri(p.x, p.y, vtx[a], vtx[a + 1], vtx[b], vtx[b + 1], vtx[c], vtx[c + 1])) {
+          hits.push({ i, id: cm2.getDrawableIds?.()[i], order: order[i], tex: cm2.getDrawableTextureIndices(i), opacity: cm2.getDrawableOpacity(i), mask: cm2.getDrawableMaskCounts()[i], blend: cm2.getDrawableBlendMode(i) })
+          break
+        }
+      }
+    }
+    hits.sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
+    pushLog('hit', `(${sx},${sy}) model=(${p.x.toFixed(0)},${p.y.toFixed(0)}) 命中 ${hits.length} 个`)
+    for (const h of hits.slice(-4)) pushLog('hit', `#${h.i} ${h.id} tex=${h.tex} op=${h.opacity.toFixed(2)} mask=${h.mask} blend=${h.blend} order=${h.order}`)
+    state.hits = hits.slice(-4)
+    document.title = `HIT ${hits.length} ${hits.slice(-2).map((h) => h.id).join(' ')}`
+  }
 
   // 确定性步进：无头浏览器只渲一帧，用这个手动推进 N 帧再取样（也可当 CI 钩子）
   if (q.get('steps')) {
@@ -219,6 +254,14 @@ function introspect() {
   const drawIds = cm._drawableIds || []
   pushLog('inspect', `贴图 ${tex.length} 张${tex[0]?.width ? ` / ${tex.map((t) => `${t.width}x${t.height}`).join(' ')}` : ''} · 网格 ${drawIds.length} 个`)
   state.inspect = { tex: tex.length, drawables: drawIds.length }
+  try {
+    const mc = cm.getDrawableMaskCounts ? Array.from(cm.getDrawableMaskCounts()) : []
+    const masked = mc.filter((n) => n > 0).length
+    const inverted = drawIds.filter((_, i) => cm.getDrawableInvertedMaskBit?.(i)).length
+    const blended = drawIds.filter((_, i) => (cm.getDrawableBlendMode?.(i) ?? 0) !== 0).length
+    pushLog('inspect', `遮罩网格 ${masked}/${drawIds.length}（反相 ${inverted}）· 非普通混合 ${blended}`)
+    state.inspect.masked = masked
+  } catch (e) { pushLog('warn', '遮罩内省失败: ' + e.message) }
 }
 
 // ---------- 动作通路 ----------
