@@ -16,15 +16,22 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
 export function createFacePinch({ param, options = {} } = {}) {
   const cfg = {
-    maxPull: 150,        // 拖动多少像素算拉满
+    maxPull: 260,        // 拖动多少像素算拉满（原 150：稍一拖就到顶，没有「越捏越大」的层次）
+    curvePow: 0.62,      // 响应曲线：前段更跟手（pow<1），拖一点就有反应
     follow: 10,          // 跟手速度（1/s）
     releasePerSec: 4.5,  // 松手回落速度
     puff: 1,             // 整体鼓脸比例（按参数量程）
     side: 1,             // 单边鼓脸比例
     wiggleHz: 3.2,
     wiggle: 0.25,
+    pucker: 0.35,        // 被捏时撅嘴（加强「被捏住」的可读性）
     headTurn: 18,       // 拉满时头的额外偏转角度（@maxPull 像素）
     maxHeadTurn: 20,    // 上限
+    // 前倾耦合（物理输入）：模型前倾时脸会贴近镜头，实测脸框 727→938 宽（+29%），
+    // 鼓脸的视觉可读性主要靠这一下放大——单写 CheeckPuff 时变化非常小。
+    leanIdle: -5,        // 刚捏住时的前倾量
+    leanFull: -26,       // 拉满时的前倾量（量程 ±30）
+    leanBlocked: null,   // () => boolean：用户手动开了「前倾」时为 true，让位
     ...options,
   }
 
@@ -75,7 +82,7 @@ export function createFacePinch({ param, options = {} } = {}) {
   function move(dx, dy) {
     if (!side) return
     pulled += Math.hypot(dx, dy)
-    target = clamp(pulled / cfg.maxPull, 0, 1)
+    target = Math.pow(clamp(pulled / cfg.maxPull, 0, 1), cfg.curvePow)
     // 头跟着手走：累积带方向的位移，apply 里换成角度
     push.x = clamp(push.x + dx, -cfg.maxPull * 2, cfg.maxPull * 2)
     push.y = clamp(push.y + dy, -cfg.maxPull * 2, cfg.maxPull * 2)
@@ -86,6 +93,21 @@ export function createFacePinch({ param, options = {} } = {}) {
     target = 0
     push.x = 0
     push.y = 0
+  }
+
+  /**
+   * 物理输入写点（必须早于 physics.evaluate，别写到 apply 里）：
+   * 捏住时把身体往前带一点，脸贴近镜头会整体放大 —— 这是「捏脸变化明显」的关键一步。
+   * 实测 LeanInput -30 时脸框 727→938 宽（+29%），而单写 CheeckPuff 几乎看不出来。
+   * 用户若手动开了「前倾」（同一个参数），就让位给他的选择。
+   */
+  function applyPhysics() {
+    const r = range('LeanInput')
+    if (!r) return
+    if (!side && mag < 0.01) return
+    if (cfg.leanBlocked && cfg.leanBlocked()) return
+    const want = cfg.leanIdle + (cfg.leanFull - cfg.leanIdle) * mag
+    param.set('LeanInput', clamp(want, r.lo, r.hi))
   }
 
   function apply(dtMs = 1000 / 60) {
@@ -116,6 +138,8 @@ export function createFacePinch({ param, options = {} } = {}) {
     if (has('CheeckPuffL')) writeFrac('CheeckPuffL', side === 'R' ? m * cfg.side : 0)
     if (has('CheeckPuffR')) writeFrac('CheeckPuffR', side === 'L' ? m * cfg.side : 0)
     if (has('CheeksWiggleX')) writeAbs('CheeksWiggleX', wiggleAmt)
+    // 被捏住时撅一下嘴：脸的参数变化本来就弱，嘴一动「被捏住」立刻就成立了
+    if (has('Mouthpucker')) add('Mouthpucker', m * cfg.pucker)
 
     // 头跟着被捏的方向转：脸的变化没那么明显，靠头的幅度把「怕疼跟着走」演出来
     if (!side) {
@@ -137,7 +161,7 @@ export function createFacePinch({ param, options = {} } = {}) {
   }
 
   return {
-    grab, move, release, apply,
+    grab, move, release, apply, applyPhysics,
     test(side) { testSide = side || null },
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,

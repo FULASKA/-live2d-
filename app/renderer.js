@@ -8,6 +8,8 @@ import { createRegionStore, createRegionInput, seedRegions, faceRegions, createF
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
+import { createLife } from '../src/stage/life.js'
+import { createMouth } from '../src/stage/mouth.js'
 import { createProfiler } from '../src/stage/perf.js'
 
 const $ = (s) => document.querySelector(s)
@@ -127,7 +129,11 @@ async function bootStage() {
     part: stage.part,
     isPhysicsInput: (id) => state.physics.inputs.has(id) && !state.physics.outputs.has(id),
   })
-  stage.onBeforePhysics(() => state.layers.applyPhysics())
+  stage.onBeforePhysics(() => {
+    state.layers.applyPhysics()
+    // 捏脸时把身体往前带（物理输入必须写在这里，写晚了物理不会跟着动）
+    state.facePinch?.applyPhysics()
+  })
 
   state.reactions = createReactions({
     layers: state.layers,
@@ -147,7 +153,19 @@ async function bootStage() {
   })
 
   // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘
-  state.facePinch = createFacePinch({ param: stage.param })
+  // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘 + 身体前倾放大
+  state.facePinch = createFacePinch({
+    param: stage.param,
+    options: {
+      // 用户手动开了「前倾」时，捏脸就不再抢 LeanInput
+      leanBlocked: () => !!state.layers?.hasExpression('前倾'),
+    },
+  })
+
+  // 活气层：耳朵扑棱 / 头发惯性 / 耳环摆动（读回物理值再叠加，写在物理之后）
+  state.life = createLife({ param: stage.param })
+  // 嘴：呼吸微动 + 说话音节（模型 LipSync 组是空的，这是唯一驱动源）
+  state.mouth = createMouth({ param: stage.param })
 
   let lastT = performance.now()
   stage.onBeforeUpdate(() => {
@@ -158,9 +176,85 @@ async function bootStage() {
       state.gaze.apply(dt)
       state.layers.apply()
       state.petSway.apply(dt)
+      // 顺序：表情层之后加嘴与活气，最后捏脸（捏脸要压过嘴的待机微动）
+      state.mouth.apply(dt)
+      state.life.apply(dt)
       state.facePinch?.apply(dt)
     })
   })
+
+  // ---------- 标定探针（开发期用：单参数覆写 / 物理读回采样） ----------
+  window.__probe = {
+    /** 覆写一个参数（持续生效，直到 clear） */
+    param(id, v, blend = 'Overwrite') {
+      state.layers.removeSource('probe')
+      state.layers.addExpression('probe', [{ Id: id, Value: v, Blend: blend }], { fade: 0, source: 'probe' })
+    },
+    /** 一组参数同时覆写 */
+    params(list, blend = 'Overwrite') {
+      state.layers.removeSource('probe')
+      state.layers.addExpression('probe', list.map(([Id, Value]) => ({ Id, Value, Blend: blend })), { fade: 0, source: 'probe' })
+    },
+    clear() { state.layers.removeSource('probe') },
+    // ---- 捏脸 / 活气 / 嘴的探针 ----
+    pinch(side = 'L', px = 320) { state.facePinch?.grab(side); state.facePinch?.move(px, 0) },
+    pinchEnd() { state.facePinch?.release() },
+    pinchState: () => state.facePinch?.state() ?? null,
+    flap(side = 'L', amp = 1) { state.life?.flap(side, amp) },
+    life: () => state.life?.state() ?? null,
+    talk(v = 0) { state.mouth?.speak(v) },
+    mouth: () => state.mouth?.state() ?? null,
+    earNow: () => ['LEar1', 'LEar2', 'LEar3', 'REar1', 'ParamMouthOpenY', 'LeanInput', 'ParamAngleZ']
+      .map((id) => `${id}=${Math.round((state.stage.param.get(id) || 0) * 100) / 100}`).join(' '),
+    read: (id) => state.stage.param.get(id),
+    /** 参数的定义区间（判断某个值是不是「超出范围被钳住」） */
+    info: (id) => state.stage.param.info(id),
+    /** 当前左右脸热区的包围盒（模型像素）——用来量化「仰头让脸变宽」 */
+    faceBox() {
+      const rs = (state.store?.all || []).filter((r) => r.name === '左脸' || r.name === '右脸')
+      if (!rs.length) return null
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const r of rs) {
+        for (const p of r.points || []) {
+          if (p[0] < minX) minX = p[0]
+          if (p[0] > maxX) maxX = p[0]
+          if (p[1] < minY) minY = p[1]
+          if (p[1] > maxY) maxY = p[1]
+        }
+      }
+      return { w: Math.round(maxX - minX), h: Math.round(maxY - minY), y: Math.round((minY + maxY) / 2) }
+    },
+    /**
+     * 物理输出参数在 onBeforeUpdate（物理之后）还有没有值？
+     * 有值 → 可以「叠加」；读到 0 → 只能整层接管。
+     */
+    physicsSample(ids = ['LEar1', 'LEar2', 'LEar3', 'FrontHairY1', 'SideHairY1', 'LateHairY1'], frames = 90) {
+      return new Promise((resolve) => {
+        const acc = {}
+        for (const id of ids) acc[id] = { min: Infinity, max: -Infinity, n: 0, last: null }
+        let left = frames
+        const off = state.stage.onBeforeUpdate(() => {
+          for (const id of ids) {
+            const v = state.stage.param.get(id)
+            if (v == null) continue
+            const a = acc[id]
+            if (v < a.min) a.min = v
+            if (v > a.max) a.max = v
+            a.last = Math.round(v * 100) / 100
+            a.n += 1
+          }
+          if (--left <= 0) {
+            off()
+            for (const id of ids) {
+              acc[id].min = Math.round(acc[id].min * 100) / 100
+              acc[id].max = Math.round(acc[id].max * 100) / 100
+            }
+            resolve(acc)
+          }
+        })
+      })
+    },
+  }
 
   const viewport = createViewport({ model: stage.model, app: stage.app })
   state.viewport = viewport
@@ -292,6 +386,10 @@ function bootRegions() {
       const name = ev.region?.name
       if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
       if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) state.reactions.apply(ev.region, 'pet')
+      // 被点/被摸的时候，耳朵跟着扑棱一下（平时它自己每 6~13 秒也会扑棱）
+      if (name === '头' && (ev.type === 'tap' || (ev.type === 'pet' && ev.step === 1))) {
+        state.life?.flap(Math.random() < 0.5 ? 'L' : 'R', 1)
+      }
       // 只有头会「跟着手摆」：按下起记位移，滑动按 50% 转成角度；其它部位不再弹
       if (name === '头') {
         if (ev.type === 'down' || (ev.type === 'pet' && !state.petArmed)) {
