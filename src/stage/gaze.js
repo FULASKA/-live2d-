@@ -17,11 +17,16 @@ export function createGaze({ param, options = {} } = {}) {
     strength: 1,        // 总强度 0..1
     deadZone: 0.06,     // 中心死区，避免静止时抖
     // 各通道：满偏时写多少（eye 是 ±1 的量程，head/body 是角度制的比例）
+    // 实测本模型（3749×7697 画布）：ParamAngleY 满偏只带动头部约 110–148px；
+    // ParamBodyAngleY（胸腔）满偏能带动头部约 450px —— 埋头/抬头真正的杠杆在身体。
     eye: 0.85,
-    head: 0.5,          // × ParamAngleX 的 30° → 15°
+    head: 0.75,         // × ParamAngleX 的 30° → 22.5°
     headRoll: 0.12,     // × 30° → 3.6°，横向看时轻微歪头
-    body: 0.2,          // × 30° → 6°
+    body: 0.45,         // × 30° → 13.5°
     bodyRoll: 0.08,
+    // 非对称：低头时身体多弯（像真的埋下头），抬头时收敛些，避免整个人往后折
+    bowBoost: 1.7,      // 目标向下时，身体幅度 × 1.7
+    liftDamp: 0.8,      // 目标向上时，身体幅度 × 0.8
     // 阻尼（1/s）：越大越跟手
     dampingEye: 20,
     dampingHead: 7,
@@ -85,8 +90,11 @@ export function createGaze({ param, options = {} } = {}) {
     add('ParamAngleX', state.headX * cfg.head * 30)
     add('ParamAngleY', state.headY * cfg.head * 30)
     add('ParamAngleZ', -state.headX * cfg.headRoll * 30)
+
+    // 身体幅度按方向非对称：向下（埋头）多弯，向上收敛
+    const bodyYk = state.bodyY < 0 ? cfg.bowBoost : cfg.liftDamp
     add('ParamBodyAngleX', state.bodyX * cfg.body * 30)
-    add('ParamBodyAngleY', state.bodyY * cfg.body * 0.6 * 30)
+    add('ParamBodyAngleY', state.bodyY * cfg.body * bodyYk * 30)
     add('ParamBodyAngleZ', -state.bodyX * cfg.bodyRoll * 30)
   }
 

@@ -84,7 +84,7 @@ async function bootStage() {
         key2: stage.param.get('key2'), key7: stage.param.get('key7'),
         eyeX: stage.param.get('ParamEyeBallX'), eyeY: stage.param.get('ParamEyeBallY'),
         angleX: stage.param.get('ParamAngleX'), angleY: stage.param.get('ParamAngleY'), angleZ: stage.param.get('ParamAngleZ'),
-        bodyX: stage.param.get('ParamBodyAngleX'),
+        bodyX: stage.param.get('ParamBodyAngleX'), bodyY: stage.param.get('ParamBodyAngleY'),
       }
     })
 
