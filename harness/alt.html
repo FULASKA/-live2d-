@@ -18,17 +18,35 @@
 { "imports": { "pixi.js": "/tmp/alt/node_modules/pixi.js/dist/pixi.mjs" } }
 </script>
 <script type="module">
-const err = (m) => { document.getElementById('err').textContent += m + '\n'; console.error(m) }
+const err = (m) => { document.getElementById('err').textContent += m + ' | '; console.error(m) }
+window.addEventListener('error', (e) => err('[window.error] ' + (e.message || e.type)))
+window.addEventListener('unhandledrejection', (e) => err('[reject] ' + (e.reason && e.reason.message || e.reason)))
+err('· 开始')
 try {
+  err('· import pixi')
   const PIXI = await import('pixi.js')
+  err('· import live2d lib')
   const mod = await import('/tmp/alt/node_modules/@jannchie/pixi-live2d-display/dist/cubism4.es.js')
   const Live2DModel = mod.Live2DModel
+  err('· exports: ' + Object.keys(mod).slice(0, 8).join(','))
+  // 库的 setRenderer 没有空值保护：'gl' in undefined 直接抛
+  for (const k of Object.keys(mod)) {
+    const C = mod[k]
+    if (typeof C === 'function' && C.prototype && typeof C.prototype.setRenderer === 'function') {
+      const orig = C.prototype.setRenderer
+      C.prototype.setRenderer = function (r) { if (!r) return; try { return orig.call(this, r) } catch (e) { console.warn('[setRenderer]', e) } }
+    }
+  }
 
+  err('· app init')
   const app = new PIXI.Application()
   await app.init({ backgroundAlpha: 0, antialias: true, resizeTo: window, autoDensity: true })
+  err('· app ready')
   document.getElementById('stage').appendChild(app.canvas)
 
   const model = await Live2DModel.from('/m/%E5%A4%A7%E8%82%A5%E9%B1%BC.model3.json')
+  err('· model loaded')
+  try { model.setRenderer?.(app.renderer) } catch {}
   model.anchor.set(0.5, 0.5)
   app.stage.addChild(model)
 

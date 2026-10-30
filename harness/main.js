@@ -172,6 +172,27 @@ function applyDeepLink() {
     document.title = `HIT ${hits.length} ${hits.slice(-2).map((h) => h.id).join(' ')}`
   }
 
+  // 部件实验：?hidepart=Part10,Part46 / ?showpart=Part43:1
+  state.partOverride = new Map()
+  for (const id of (q.get('hidepart') || '').split(',').filter(Boolean)) state.partOverride.set(id, 0)
+  for (const kv of (q.get('showpart') || '').split(',').filter(Boolean)) {
+    const [id, v] = kv.split(':')
+    state.partOverride.set(id, Number(v ?? 1))
+  }
+  if (state.partOverride.size) pushLog('probe', `部件覆盖 ${[...state.partOverride].map(([k, v]) => `${k}=${v}`).join(' ')}`)
+
+  // 遮罩实验：?nomask=1 把所有网格的遮罩上下文置空，看画面怎么变
+  if (q.get('nomask')) {
+    const r = model.internalModel.renderer
+    const mgr = r && r._clippingManager
+    if (mgr && Array.isArray(mgr._clippingContextListForDraw)) {
+      mgr._clippingContextListForDraw = new Array(mgr._clippingContextListForDraw.length).fill(null)
+      pushLog('probe', '遮罩上下文已清空')
+    } else {
+      pushLog('probe', '找不到 clippingManager：' + (mgr ? '结构不同' : '未初始化'))
+    }
+  }
+
   // 确定性步进：无头浏览器只渲一帧，用这个手动推进 N 帧再取样（也可当 CI 钩子）
   if (q.get('steps')) {
     const n = Math.max(1, Number(q.get('steps')) || 60)
@@ -340,6 +361,10 @@ function applyLayers() {
     }
   }
   for (const [id, v] of state.held) cm.setParameterValueById(id, v)
+  for (const [id, v] of state.partOverride || []) {
+    const pi = cm.getPartIndex ? cm.getPartIndex(id) : -1
+    if (pi >= 0) cm.setPartOpacityByIndex(pi, v)
+  }
   state.fadeT = (state.fadeT || 0) + 1 / 60
   state.layerCount = (state.layerCount || 0) + 1
 }
