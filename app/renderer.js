@@ -10,6 +10,7 @@ import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
 import { createLife } from '../src/stage/life.js'
 import { createMouth } from '../src/stage/mouth.js'
+import { createIdleFaces } from '../src/stage/idle-faces.js'
 import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
 import { createProfiler } from '../src/stage/perf.js'
@@ -37,6 +38,8 @@ const shell = window.shell || {
   get: async () => ({ width: 520, height: 760, zoom: 1, gaze: true, strength: 1, alwaysOnTop: false, clickThrough: false }),
   set: async (patch) => patch,
   moveBy: () => {},
+  dragBegin: () => {},
+  dragEnd: () => {},
   setPassThrough: () => {},
   resizeBegin: () => {},
   resizeMove: () => {},
@@ -52,7 +55,7 @@ const shell = window.shell || {
 const state = {
   caps: null, stage: null, layers: null, viewport: null, gaze: null,
   store: null, regionInput: null, reactions: null, settings: null,
-  mask: null, maskAt: 0, maskPending: false, windowDragging: false,
+  mask: null, maskAt: 0, maskPending: false, windowDragging: false, middleDragging: false,
   ignoring: false, pointerDown: false,
   physics: { inputs: new Set(), outputs: new Set() },
 }
@@ -188,6 +191,8 @@ async function bootStage() {
   state.life = createLife({ param: stage.param })
   // 嘴：呼吸微动 + 说话音节（模型 LipSync 组是空的，这是唯一驱动源）
   state.mouth = createMouth({ param: stage.param })
+  // 随机小表情：笑 / 吐舌头 / 吐舌头+单眼笑，待机时自己冒出来
+  state.idleFaces = createIdleFaces({ param: stage.param })
 
   let lastT = performance.now()
   let frameDt = 1000 / 60
@@ -208,6 +213,16 @@ async function bootStage() {
     const x = window.screenX + (state.stage?.model?.position?.x || 0)
     const y = window.screenY + (state.stage?.model?.position?.y || 0)
     if (motionState.x == null) { motionState.x = x; motionState.y = y; return }
+    // 中键移动不做物理（用户要求：纯位移，不产生惯性冲击）
+    if (state.middleDragging) {
+      motionState.x = x
+      motionState.y = y
+      motionState.vx = 0
+      motionState.vy = 0
+      state.life?.motion(0, 0)
+      state.capture?.motion(0, 0)
+      return
+    }
     const dt = Math.max(0.008, dtMs / 1000)
     const vx = (x - motionState.x) / dt
     const vy = (y - motionState.y) / dt
@@ -250,6 +265,7 @@ async function bootStage() {
     perf.time('post', () => {
       state.layers.apply()
       state.mouth?.apply(frameDt)
+      state.idleFaces?.apply(frameDt)
       state.life?.apply(frameDt)
       state.facePinch?.apply(frameDt)
     })
@@ -283,6 +299,11 @@ async function bootStage() {
     },
     moods: () => Object.keys(REGION_MOUTH),
     clearMood() { state.mouth?.clearMood() },
+    faces: () => state.idleFaces?.presets() ?? [],
+    face(name) { return state.idleFaces?.trigger(name) ?? null },
+    faceState: () => state.idleFaces?.state() ?? null,
+    /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
+    pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
     earNow: () => ['LEar1', 'LEar2', 'LEar3', 'REar1', 'ParamMouthOpenY', 'LeanInput', 'ParamAngleZ']
       .map((id) => `${id}=${Math.round((state.stage.param.get(id) || 0) * 100) / 100}`).join(' '),
@@ -946,9 +967,65 @@ function setPanelExpanded(open) {
 
 function bindWindowDrag() {
   const stage = $('#stage')
-  // 左键按住角色拖 = 搬窗口（按在分区上不算）。中键那套（搬窗 / 挪角色）已移除：
-  // 手感调不稳定、收益也有限，留着只会多一条要维护的交互路径。
+  // 左键按住角色拖 = 搬窗口（按在分区上不算）；中键另有一套（见 bindMiddleDrag）
   dragWindow(stage, { canStart: (e) => !state.regionInput?.pressed?.region && bodyAt(e.clientX, e.clientY) })
+  bindMiddleDrag(stage)
+}
+
+/**
+ * 中键拖动：
+ *   - 设置面板关着 → 搬窗口（主进程按全局光标锚点搬，不会累积漂移）
+ *   - 设置面板开着 → 把角色在窗口里挪（改模型偏移，松手写进 settings）
+ * 注意：中键移动**不喂物理**（不产生惯性冲击），纯位移。
+ */
+function bindMiddleDrag(stage) {
+  let st = null
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 1) return
+    e.preventDefault()
+    hideTools()
+    const panelOpen = !$('#panel').classList.contains('hidden')
+    const v = state.viewport.view
+    st = {
+      mode: panelOpen ? 'model' : 'window',
+      x: e.screenX,
+      y: e.screenY,
+      o: { offsetX: v.offsetX, offsetY: v.offsetY },
+    }
+    state.middleDragging = true
+    if (!panelOpen) { state.windowDragging = true; shell.dragBegin() }
+    try { stage.setPointerCapture(e.pointerId) } catch {}
+  })
+  stage.addEventListener('pointermove', (e) => {
+    if (!st) return
+    const dx = e.screenX - st.x
+    const dy = e.screenY - st.y
+    if (st.mode === 'window') return
+    const w = Math.max(1, window.innerWidth)
+    const h = Math.max(1, window.innerHeight)
+    const clampOff = (v) => Math.max(-0.9, Math.min(0.9, v))
+    state.viewport.set({
+      offsetX: clampOff(st.o.offsetX + (2 * dx) / w),
+      offsetY: clampOff(st.o.offsetY + (2 * dy) / h),
+    })
+  })
+  const end = (e) => {
+    if (!st) return
+    const mode = st.mode
+    st = null
+    state.middleDragging = false
+    try { stage.releasePointerCapture(e.pointerId) } catch {}
+    if (mode === 'model') {
+      const v = state.viewport.view
+      shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
+      refreshMask(true)
+    } else {
+      state.windowDragging = false
+      shell.dragEnd()
+    }
+  }
+  stage.addEventListener('pointerup', end)
+  stage.addEventListener('pointercancel', end)
 }
 
 // ---------- 右键弹窗：设置 / 退出（固定窗口右上角，不挡角色） ----------

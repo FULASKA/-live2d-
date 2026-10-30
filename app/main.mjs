@@ -141,6 +141,35 @@ function wireResize() {
   })
 }
 
+// 中键搬窗口：主进程按全局光标锚点搬（读系统光标是绝对量，不会像事件增量那样累积漂移）
+let dragTimer = null
+let dragBase = null
+function wireWindowDrag() {
+  ipcMain.on('win:drag-begin', () => {
+    if (!win) return
+    const q = screen.getCursorScreenPoint()
+    const [x, y] = win.getPosition()
+    dragBase = { cx: q.x, cy: q.y, x, y }
+    if (dragTimer) clearInterval(dragTimer)
+    dragTimer = setInterval(() => {
+      if (!win || win.isDestroyed() || !dragBase) return
+      const p = screen.getCursorScreenPoint()
+      win.setPosition(Math.round(dragBase.x + (p.x - dragBase.cx)), Math.round(dragBase.y + (p.y - dragBase.cy)))
+    }, 16)
+  })
+  ipcMain.on('win:drag-end', () => {
+    if (dragTimer) clearInterval(dragTimer)
+    dragTimer = null
+    dragBase = null
+    if (win && !win.isDestroyed()) {
+      const [x, y] = win.getPosition()
+      settings.x = x
+      settings.y = y
+      saveSettings()
+    }
+  })
+}
+
 // ---------- IPC ----------
 function wireIpc() {
   ipcMain.handle('shell:get', () => ({ ...settings, token, port: srv?.port || null }))
@@ -203,6 +232,7 @@ app.whenReady().then(async () => {
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)
   wireIpc()
   wireResize()
+  wireWindowDrag()
   startCursorFeed()
   await createWindow()
 
