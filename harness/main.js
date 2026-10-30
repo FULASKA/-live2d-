@@ -9,6 +9,8 @@ import { createRegionStore, createRegionInput, seedRegions } from '../src/stage/
 
 const $ = (s) => document.querySelector(s)
 const TOKEN = new URLSearchParams(location.search).get('token') || 'dev-token'
+/** 透明穿透判定默认关闭；?gate=alpha 打开（窗口级穿透验证用） */
+const ALPHA_GATE = new URLSearchParams(location.search).get('gate') === 'alpha'
 
 const state = {
   caps: null, stage: null, layers: null, viewport: null, gaze: null,
@@ -273,14 +275,18 @@ function bootRegions() {
     store: state.store,
     viewport: state.viewport,
     canvas: $('#stage'),
-    // 透明像素 = 穿透：热区几何盖到背景时，点击不该被吃掉。
-    // 读不到像素（gl 异常 / 无头软渲染偶尔为空）时**放行** —— 不能因为采样失败把整块互动锁死。
-    isOpaque: (p) => {
-      const sp = state.viewport.modelToScreen(p.x, p.y)
-      const { alpha } = state.stage.sampleAlpha(sp.x, sp.y)
-      if (alpha == null) return true
-      return alpha > 12
-    },
+    // 透明像素 = 穿透：这条关默认**关掉**。
+    // 热区是用户画的矩形/凸包，边界必然盖到透明背景；真机上读像素又可能拿到全 0（渲染器/后端差异），
+    // 一旦读错，热区就整块「点了没反应」——比误触发更难查。
+    // 窗口级的透明穿透（点穿到桌面）属于产品层，用 ?gate=alpha 可以重新打开做验证。
+    isOpaque: ALPHA_GATE
+      ? (p) => {
+        const sp = state.viewport.modelToScreen(p.x, p.y)
+        const { alpha } = state.stage.sampleAlpha(sp.x, sp.y)
+        if (alpha == null) return true
+        return alpha > 12
+      }
+      : null,
     // 起手范围 = 应用窗口边界（最终形态是贴住角色的无边框透明窗口）。
     // 窗口外的事件根本进不来，所以这道判定在成品里天然成立；这里按舞台尺寸兜底。
     isNear: (sp) => {
@@ -305,10 +311,11 @@ function onRegionEvent(ev) {
       break
     case 'down':
       {
-        // 命中诊断：不管有没有命中都记一行，点不动时一眼看出卡在哪
+        // 命中诊断：几何命中与 alpha 分开记 —— 一眼看出是「没命中」还是「被透明关拦了」
         const sp = state.viewport.modelToScreen(ev.point.x, ev.point.y)
+        const geo = state.store.hit(ev.point.x, ev.point.y)
         const a = state.stage.sampleAlpha(sp.x, sp.y)
-        pushLog('hit', `按下 ${r ? r.name : '背景'} · alpha=${a.alpha == null ? 'null' : a.alpha} · 舞台(${Math.round(sp.x)},${Math.round(sp.y)})`)
+        pushLog('hit', `按下 ${r ? r.name : '背景'} · 几何=${geo ? geo.name : '无'} · alpha=${a.alpha == null ? 'null' : a.alpha} · 舞台(${Math.round(sp.x)},${Math.round(sp.y)})`)
       }
       break
     case 'dragStart':
