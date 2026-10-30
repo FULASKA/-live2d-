@@ -12,6 +12,7 @@ const TOKEN = new URLSearchParams(location.search).get('token') || 'dev-token'
 const state = {
   caps: null, model: null, app: null,
   held: new Map(),        // 受控参数（模拟 L5 覆盖层）
+  exprs: [],              // L2 表情层：可叠多层，后应用者覆盖同参数
   gaze: true, intensity: 0.6,
   log: [],
   stateMap: {
@@ -62,10 +63,12 @@ async function boot() {
 async function bootStage() {
   const PIXI = window.PIXI
   const stageEl = $('#stage')
+  const q0 = new URLSearchParams(location.search)
   const app = new PIXI.Application({
-    view: $('#cv'), backgroundAlpha: 0, antialias: true,
+    view: $('#cv'), backgroundAlpha: q0.get('bg') ? 1 : 0, antialias: true,
     autoDensity: true, resolution: window.devicePixelRatio || 1, resizeTo: stageEl,
   })
+  if (q0.get('bg')) app.renderer.backgroundColor = parseInt(q0.get('bg').replace('#', ''), 16)
   state.app = app
 
   try {
@@ -109,14 +112,15 @@ function applyDeepLink() {
   const q = new URLSearchParams(location.search)
   const { model } = state
   if (q.get('expr')) {
-    playExpression({ name: q.get('expr') }); pushLog('deep', `表情 ${q.get('expr')}`)
+    for (const n of q.get('expr').split(',')) addExpression(n.trim())
+    pushLog('deep', `表情 ${q.get('expr')}`)
     setTimeout(() => {
       const cm = state.model?.internalModel.coreModel
       if (!cm) return
       const probe = ['key1', 'key3', 'key4', 'key5', 'key6', 'key7']
         .map((id) => `${id}=${Number(cm.getParameterValueById(id) ?? NaN).toFixed(2)}`)
       pushLog('check', `expr 生效: ${probe.join(' ')}`)
-      if (!q.get('steps')) document.title = `DBG frames=${state.frames || 0} layers=${state.layerCount || 0} expr=${state.expr?.name || '-'} ids=${(cm._parameterIds || []).length} ${probe.join(' ')}`
+      if (!q.get('steps')) document.title = `DBG frames=${state.frames || 0} layers=${state.layerCount || 0} expr=${state.exprs.map((x) => x.name).join('+') || '-'} ${probe.join(' ')}`
     }, 1200)
   }
   if (q.get('motion')) {
@@ -210,6 +214,11 @@ function introspect() {
   const mm = model.internalModel.motionManager
   const groups = mm?.definitions ? Object.keys(mm.definitions) : []
   if (groups.length) pushLog('inspect', `动作组: ${groups.join(', ')}`)
+  // 贴图与网格：黑块/空眼多半出在这两处
+  const tex = model.textures || model.internalModel.textures || []
+  const drawIds = cm._drawableIds || []
+  pushLog('inspect', `贴图 ${tex.length} 张${tex[0]?.width ? ` / ${tex.map((t) => `${t.width}x${t.height}`).join(' ')}` : ''} · 网格 ${drawIds.length} 个`)
+  state.inspect = { tex: tex.length, drawables: drawIds.length }
 }
 
 // ---------- 动作通路 ----------
@@ -233,22 +242,49 @@ function playMotion(m, i) {
 }
 const indexInGroup = (m) => state.caps.motions.filter((x) => x.group === m.group).findIndex((x) => x.file === m.file)
 
-/** L2 表情层：自己按 exp3 的 Blend 语义叠到参数上，可淡入、可清除、可被更高层覆盖 */
-function setExpression(name, { fade = 0.3 } = {}) {
-  if (!name) { state.expr = null; pushLog('expr', '清除'); return }
+/** L2 表情层：支持多层叠加。同一参数由后应用的一层胜出（眼型组因此天然互斥） */
+function addExpression(name, { fade = 0.3 } = {}) {
   const def = state.caps.expressions.find((e) => e.name === name)
-  if (!def) { pushLog('warn', `没有表情: ${name}`); return }
-  state.expr = { name, params: def.params, t0: state.fadeT || 0, fadeSec: Math.max(0, fade) }
-  pushLog('expr', `→ ${name}（${def.params.length} 个参数）`)
+  if (!def) { pushLog('warn', `没有表情: ${name}`); return false }
+  if (state.exprs.some((x) => x.name === name)) return true
+  state.exprs.push({ name, params: def.params, t0: state.fadeT || 0, fadeSec: Math.max(0, fade) })
+  pushLog('expr', `+ ${name}（${def.params.length} 参数）`)
+  renderExprChips()
+  return true
 }
 
-/** 每帧在动作之后、coreModel.update 之前叠层：先 L2 表情，再 L5 受控参数 */
+function removeExpression(name) {
+  const i = state.exprs.findIndex((x) => x.name === name)
+  if (i >= 0) { state.exprs.splice(i, 1); pushLog('expr', `− ${name}`); renderExprChips() }
+}
+
+function toggleExpression(name) {
+  if (state.exprs.some((x) => x.name === name)) removeExpression(name); else addExpression(name)
+}
+
+function clearExpressions() {
+  state.exprs.length = 0
+  renderExprChips()
+  pushLog('expr', '清空')
+}
+
+function renderExprChips() {
+  const host = $('#expr-chips')
+  if (!host) return
+  host.innerHTML = state.exprs.length
+    ? state.exprs.map((x) => `<span class="chip" data-x="${x.name}">${x.name} ×</span>`).join('') +
+      '<span class="chip ghost" data-clear="1">清空</span>'
+    : '<span class="meta">点左侧表情加入叠加</span>'
+  host.querySelectorAll('[data-x]').forEach((el) => el.onclick = () => removeExpression(el.dataset.x))
+  host.querySelector('[data-clear]')?.addEventListener('click', clearExpressions)
+}
+
+/** 每帧在动作之后、coreModel.update 之前叠层：L2 表情（可多层）→ L5 受控参数 */
 function applyLayers() {
   const { model } = state
   if (!model) return
   const cm = model.internalModel.coreModel
-  const ex = state.expr
-  if (ex) {
+  for (const ex of state.exprs) {
     const k = ex.fadeSec > 0 ? Math.min(1, Math.max(0, ((state.fadeT || 0) - ex.t0) / ex.fadeSec)) : 1
     for (const p of ex.params) {
       const cur = cm.getParameterValueById(p.Id)
@@ -258,9 +294,7 @@ function applyLayers() {
         : blend === 'Add' ? cur + p.Value * k
           : cur + (p.Value - cur) * k
       cm.setParameterValueById(p.Id, target)
-      if (p.Id === 'key3') state.dbgLayer = { k: Number(k.toFixed(3)), cur, target, v: p.Value, blend: blend, read: cm.getParameterValueById('key3') }
     }
-    if (state.dbg && state.dbg.readback == null) state.dbg.readback = cm.getParameterValueById('key3')
   }
   for (const [id, v] of state.held) cm.setParameterValueById(id, v)
   state.fadeT = (state.fadeT || 0) + 1 / 60
@@ -270,14 +304,14 @@ function applyLayers() {
 function playExpression(e) {
   const { model } = state
   if (!model) return pushLog('warn', '模型未加载')
-  setExpression(e.name)
+  toggleExpression(e.name)
   postAction({ kind: 'expression', name: e.name })
 }
 
 function sendState(s) {
   const mapped = state.stateMap[s] || {}
   const { model } = state
-  if (model && mapped.expression) setExpression(mapped.expression)
+  if (model && mapped.expression) addExpression(mapped.expression, { fade: 0.25 })
   postAction({ kind: 'state', state: s, map: mapped }, { source: 'state', priority: s === 'waiting' ? 'FORCE' : 'NORMAL', ttlMs: s === 'success' || s === 'error' ? 4000 : 0 })
   pushLog('state', `${s} → ${mapped.expression || '（未配）'}`)
 }
@@ -300,8 +334,9 @@ function renderLists() {
     playMotion(c.motions[Number(el.dataset.m)], Number(el.dataset.m))
   })
   $('#expressions').querySelectorAll('[data-e]').forEach((el) => el.onclick = () => {
-    el.parentElement.querySelectorAll('.item').forEach((x) => x.classList.remove('on')); el.classList.add('on')
-    playExpression(c.expressions[Number(el.dataset.e)])
+    const e = c.expressions[Number(el.dataset.e)]
+    playExpression(e)
+    el.classList.toggle('on', state.exprs.some((x) => x.name === e.name))
   })
   renderParams()
   $('#q').oninput = () => {
