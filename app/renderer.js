@@ -15,6 +15,7 @@ const shell = window.shell || {
   get: async () => ({ width: 520, height: 760, zoom: 1, gaze: true, strength: 1, alwaysOnTop: false, clickThrough: false }),
   set: async (patch) => patch,
   moveBy: () => {},
+  setPassThrough: () => {},
   center: () => {},
   quit: () => {},
   devtools: () => {},
@@ -25,6 +26,7 @@ const shell = window.shell || {
 const state = {
   caps: null, stage: null, layers: null, viewport: null, gaze: null,
   store: null, regionInput: null, reactions: null, settings: null,
+  mask: null, maskAt: 0, ignoring: false, pointerDown: false,
   physics: { inputs: new Set(), outputs: new Set() },
 }
 
@@ -45,6 +47,7 @@ async function main() {
     bootRegions()
     bindPanel()
     bindWindowDrag()
+    bindPassThrough()
     document.title = `stage · ${state.caps.model.name}`
   } catch (e) {
     console.error(e)
@@ -189,10 +192,91 @@ function dragWindow(el, { canStart, ignore } = {}) {
   return el
 }
 
+// ---------- 透明处穿透：只让「角色轮廓」接收鼠标 ----------
+// 窗口是矩形，透明区本来也吃鼠标：停在空白处，后面的桌面/窗口点不到；
+// 空白处按下还能把整块看不见的窗口拖走 —— 这就是「隐藏的窗口边缘」。
+// 做法：把当前帧渲染成缩略 alpha 掩码，指针不在角色身上就让点击穿过去。
+const MASK_SCALE = 4
+// 掩码几乎全空 = 没渲染出来，这种情况下永远保持可点，别把窗口弄成点不动的死窗
+const MASK_MIN_COVERAGE = 0.004
+
+function refreshMask(force = false) {
+  const now = performance.now()
+  if (!force && state.mask && now - state.maskAt < 700) return state.mask
+  const m = state.stage?.alphaMask?.(MASK_SCALE)
+  if (m) { state.mask = m; state.maskAt = now }
+  return state.mask
+}
+
+/** 客户端坐标是否落在角色身上；拿不到掩码一律当作「在」——宁可点得到 */
+function bodyAt(x, y) {
+  const m = state.mask
+  if (!m || m.coverage < MASK_MIN_COVERAGE) return true
+  const r = state.stage.canvas.getBoundingClientRect()
+  const sx = (x - r.left) / Math.max(1, r.width)
+  const sy = (y - r.top) / Math.max(1, r.height)
+  if (sx < 0 || sy < 0 || sx > 1 || sy > 1) return false
+  const cx = Math.min(m.w - 1, Math.floor(sx * m.w))
+  const cy = Math.min(m.h - 1, Math.floor(sy * m.h))
+  // 一个小膨胀：边缘抖一两格不算离开角色，免得边沿闪烁
+  for (let dy = -1; dy <= 1; dy++) {
+    const ny = cy + dy
+    if (ny < 0 || ny >= m.h) continue
+    for (let dx = -1; dx <= 1; dx++) {
+      const nx = cx + dx
+      if (nx < 0 || nx >= m.w) continue
+      if (m.data[ny * m.w + nx] > 8) return true
+    }
+  }
+  return false
+}
+
+/** 指针在面板/工具条这类 HTML 控件上时一律算「要接收」，否则设置面板会点不动 */
+function overUi(x, y) {
+  const el = document.elementFromPoint(x, y)
+  return !!el && el.tagName !== 'CANVAS'
+}
+
+function bindPassThrough() {
+  let pending = null
+  let queued = false
+  // 按住期间一概不穿透：滑出轮廓那一刻若忽略鼠标，pointerup 会丢，抚摸/拖动就卡在按下态
+  const down = () => { state.pointerDown = true }
+  const up = () => { state.pointerDown = false }
+  window.addEventListener('pointerdown', down, true)
+  window.addEventListener('pointerup', up, true)
+  window.addEventListener('pointercancel', up, true)
+  window.addEventListener('blur', up)
+  const apply = () => {
+    queued = false
+    if (!pending || !state.settings || state.settings.clickThrough) return
+    const want = !state.pointerDown && !overUi(pending.x, pending.y) && !bodyAt(pending.x, pending.y)
+    if (want === state.ignoring) return
+    state.ignoring = want
+    shell.setPassThrough(want)
+  }
+  window.addEventListener('pointermove', (e) => {
+    pending = { x: e.clientX, y: e.clientY }
+    refreshMask()
+    if (queued) return
+    queued = true
+    requestAnimationFrame(apply)
+  })
+  window.addEventListener('resize', () => refreshMask(true))
+  refreshMask(true)
+  // 验证钩子（和 harness 里的 __reaction 一样，只为无头检查）
+  window.__pass = {
+    bodyAt,
+    refreshMask,
+    mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
+    state: () => ({ ignoring: state.ignoring, clickThrough: state.settings?.clickThrough, pointerDown: state.pointerDown }),
+  }
+}
+
 function bindWindowDrag() {
   const stage = $('#stage')
   // 角色铺满窗口后，角色身上几乎处处是热区：空白处拖动 + ✥ 手柄 + 面板标题栏，三条路都能搬
-  dragWindow(stage, { canStart: () => !state.regionInput?.pressed?.region })
+  dragWindow(stage, { canStart: (e) => !state.regionInput?.pressed?.region && bodyAt(e.clientX, e.clientY) })
   dragWindow($('#tool-move'))
   dragWindow($('#panel-head'), { ignore: (e) => !!e.target.closest('.close') })
   stage.addEventListener('pointerdown', () => hideTools())
@@ -248,6 +332,7 @@ function bindPanel() {
     const zoom = Number(e.target.value)
     state.viewport.set({ zoom })
     shell.set({ zoom })
+    refreshMask(true)
   }
   $('#gaze').onchange = (e) => {
     state.gaze.set({ enabled: e.target.checked })

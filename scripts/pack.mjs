@@ -60,12 +60,13 @@ async function main() {
     ignore,
   })
 
-  // 复制是在 packager 的 promise 之外继续落盘的（实测：返回后还要几秒），所以自检要轮询等待
+  // 应用在包里的真实位置是 resources/app/（asar=false）
+  const appRoot = path.join(appDir, 'resources', 'app')
   let missing = VENDOR
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 20; i++) {
     missing = []
     for (const rel of VENDOR) {
-      try { await access(path.join(appDir, rel)) } catch { missing.push(rel) }
+      try { await access(path.join(appRoot, rel)) } catch { missing.push(rel) }
     }
     if (!missing.length) break
     await new Promise((r) => setTimeout(r, 1000))

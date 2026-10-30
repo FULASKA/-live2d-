@@ -47,10 +47,13 @@ async function saveSettings() {
   } catch (e) { console.error('[settings] 保存失败', e) }
 }
 
+// 渲染层按角色轮廓实时开关的穿透（区别于手动全窗穿透 settings.clickThrough）
+let dynamicIgnore = false
+
 function applyWindowSettings() {
   if (!win) return
   win.setAlwaysOnTop(!!settings.alwaysOnTop, 'screen-saver')
-  win.setIgnoreMouseEvents(!!settings.clickThrough, { forward: true })
+  win.setIgnoreMouseEvents(!!settings.clickThrough || dynamicIgnore, { forward: true })
 }
 
 async function createWindow() {
@@ -103,6 +106,13 @@ function wireIpc() {
     const { workArea } = screen.getPrimaryDisplay()
     const [w, h] = win.getSize()
     win.setPosition(Math.round(workArea.x + (workArea.width - w) / 2), Math.round(workArea.y + (workArea.height - h) / 2))
+  })
+  // 透明处穿透：渲染层拿 alpha 掩码判定指针在不在角色身上，不在就忽略鼠标
+  // （forward: true 保证忽略鼠标时仍能收到 mousemove，挪回角色身上可以自己收回来）
+  ipcMain.on('win:pass-through', (_e, v) => {
+    if (dynamicIgnore !== !!v) console.log(`[pass] 忽略鼠标=${!!v}`)
+    dynamicIgnore = !!v
+    applyWindowSettings()
   })
   ipcMain.on('shell:quit', () => app.quit())
   ipcMain.on('shell:devtools', () => win?.webContents.toggleDevTools())

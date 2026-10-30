@@ -295,6 +295,43 @@ export async function createStage(o = {}) {
     }
   }
 
+  /**
+   * 整帧 alpha 缩略掩码：给「透明处穿透、只按角色轮廓接收鼠标」用。
+   * 一次渲染 + 一次全帧 readPixels，再按 scale 降采样（每格取最大 alpha）。
+   * 全帧读回来是为了不额外折腾 RenderTexture；520×760 也就 1.5MB，低频调用没问题。
+   * @returns {{w:number,h:number,scale:number,coverage:number,data:Uint8Array}|null}
+   */
+  const alphaMask = (scale = 4) => {
+    try {
+      app.renderer.render(app.stage)
+      const gl = app.renderer.gl
+      const W = app.renderer.width
+      const H = app.renderer.height
+      const buf = new Uint8Array(W * H * 4)
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf)
+      const s = Math.max(1, Math.round(scale))
+      const w = Math.max(1, Math.ceil(W / s))
+      const h = Math.max(1, Math.ceil(H / s))
+      const data = new Uint8Array(w * h)
+      for (let row = 0; row < H; row++) {
+        const dstRow = h - 1 - Math.floor(row / s) // readPixels 原点在左下，翻成屏幕坐标
+        const base = dstRow * w
+        for (let col = 0; col < W; col++) {
+          const a = buf[(row * W + col) * 4 + 3]
+          if (!a) continue
+          const idx = base + Math.floor(col / s)
+          if (a > data[idx]) data[idx] = a
+        }
+      }
+      let hits = 0
+      for (let i = 0; i < data.length; i++) if (data[i] > 8) hits++
+      return { w, h, scale: s, coverage: hits / data.length, data }
+    } catch (e) {
+      console.warn('[alphaMask]', e && e.message || e)
+      return null
+    }
+  }
+
   const resize = (w, h) => {
     const W = Math.max(1, Math.round(w))
     const H = Math.max(1, Math.round(h))
@@ -315,7 +352,7 @@ export async function createStage(o = {}) {
     /** 在 physics.evaluate 之前一刻调用（物理输入参数必须在这里写） */
     onBeforePhysics(fn) { beforePhysicsHooks.add(fn); return () => beforePhysicsHooks.delete(fn) },
     motion, stopMotions, setExpression,
-    modelSize, size, resize, toModel, hitTest, sampleAlpha, sampleAlphaRegion,
+    modelSize, size, resize, toModel, hitTest, sampleAlpha, sampleAlphaRegion, alphaMask,
     focus: (x, y, instant) => model.focus(x, y, instant),
     destroy() {
       beforeHooks.clear()

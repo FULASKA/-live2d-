@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('shell', {
   get: () => ipcRenderer.invoke('shell:get'),
   set: (patch) => ipcRenderer.invoke('shell:set', patch),
   moveBy: (dx, dy) => ipcRenderer.send('win:move', { dx, dy }),
+  setPassThrough: (v) => ipcRenderer.send('win:pass-through', v),
   center: () => ipcRenderer.send('win:center'),
   quit: () => ipcRenderer.send('shell:quit'),
   devtools: () => ipcRenderer.send('shell:devtools'),
