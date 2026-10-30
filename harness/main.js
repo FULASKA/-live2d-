@@ -347,6 +347,9 @@ function applyReaction(region, kind) {
   const rx = region.reaction?.[kind] || DEFAULT_REACTIONS[region.name]?.[kind]
   if (!rx) return
   const gid = `${region.name}:${kind}`
+  const wanted = []
+  if (rx.toggle) wanted.push(rx.toggle)
+  for (const name of rx.expr || (rx.expression ? [rx.expression] : [])) wanted.push(name)
 
   // 同一个开关组再点一次 → 收回（换装 / 脱鞋 / 尾巴这类）
   if (active.group === gid && rx.toggle) {
@@ -354,20 +357,33 @@ function applyReaction(region, kind) {
     pushLog('region', `${region.name} · ${kind} → 收回 ${rx.toggle}`)
     return
   }
-  // 不同动作组：先把上一组整个撤掉，再上新组 —— 这就是「切换而不叠加」
-  if (active.group) clearReactionGroup('切换动作组')
+
+  // 切组：只撤掉新组里没有的层。两边都有的（腿:点击 的「加载」→ 腿:滑动 的「加载+脸红」）
+  // 原地保留 —— 移除再重建会让表情的动画/淡入从头开始，看起来就是「被重置了一次」。
+  if (active.timer) { clearTimeout(active.timer); active.timer = 0 }
+  const keep = new Set(wanted)
+  const removed = state.layers.removeSourceExcept(REACTION_SOURCE, keep)
   active.group = gid
 
   const added = []
-  if (rx.toggle && addExpression(rx.toggle, { source: REACTION_SOURCE })) added.push(rx.toggle)
-  for (const name of rx.expr || (rx.expression ? [rx.expression] : [])) {
+  for (const name of wanted) {
     if (addExpression(name, { source: REACTION_SOURCE })) added.push(name)
   }
+  if (removed.length) {
+    renderExprChips()
+    pushLog('expr', `− ${removed.join(' + ')}（切换动作组）`)
+  }
+  const kept = wanted.filter((n) => !added.includes(n))
+
   if (rx.motion) {
     const m = state.caps.motions.find((x) => x.name === rx.motion)
     if (m) playMotion(m)
   }
-  pushLog('region', `${region.name} · ${kind} → ${added.join(' + ') || (rx.motion || '（无预设）')}`)
+  const shown = [
+    ...added,
+    ...kept.map((n) => `${n}（续）`),
+  ].join(' + ')
+  pushLog('region', `${region.name} · ${kind} → ${shown || (rx.motion || '（无预设）')}`)
   if (!rx.toggle) active.timer = setTimeout(() => clearReactionGroup('到时'), REACTION_TTL)
 }
 
@@ -618,6 +634,8 @@ function applyDeepLink() {
       const r = state.store.all.find((x) => x.name === name)
       if (r) applyReaction(r, kind)
       else pushLog('warn', `没有热区：${name}`)
+      // 两次反应之间推进若干帧（验证「同名表情是否被重置重播」）
+      if (q.get('reactiongap')) stage.step(Math.max(1, Number(q.get('reactiongap')) || 10))
     }
   }
 

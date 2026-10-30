@@ -55,17 +55,22 @@ export function createLayerStack({ param, part, isPhysicsInput = () => false } =
       return true
     },
     /**
-     * 清掉某个来源的全部表情层，返回被清的名字。
-     * 分区互动的「不同动作组切换而不叠加」就靠它：新组进来前先按 source 整组清空。
+     * 清掉某个来源的表情层，但**保留 keep 里已有的层**（原地不动，不重播淡入）。
+     * 分区互动的「切换不叠加」用它：连点同一个区域的两个手势时，
+     * 两边都有的表情（比如 腿:点击 的「加载」→ 腿:滑动 的「加载+脸红」）必须保留，
+     * 否则会被移除再重建，加载动画从头开始 —— 看起来就是「被重置了一次」。
      */
-    removeSource(source) {
+    removeSourceExcept(source, keep = null) {
       const removed = []
       for (let i = exprLayers.length - 1; i >= 0; i--) {
-        if (exprLayers[i].source !== source) continue
+        const l = exprLayers[i]
+        if (l.source !== source) continue
+        if (keep && keep.has(l.name)) continue
         removed.unshift(exprLayers.splice(i, 1)[0].name)
       }
       return removed
     },
+    removeSource(source) { return api.removeSourceExcept(source, null) },
     toggleExpression(name, params, opts) {
       return api.removeExpression(name) || api.addExpression(name, params, opts)
     },
@@ -76,6 +81,11 @@ export function createLayerStack({ param, part, isPhysicsInput = () => false } =
     },
     hasExpression: (name) => exprLayers.some((l) => l.name === name),
     expressions: () => exprLayers.map((l) => l.name),
+    /** 单层的调试信息（t0 = 加入时的帧号，用来确认「有没有被重置重播」） */
+    entry(name) {
+      const l = exprLayers.find((x) => x.name === name)
+      return l ? { name: l.name, source: l.source, t0: l.t0, fadeFrames: l.fadeFrames, params: l.params.length } : null
+    },
     /** 当前每层的来源，排查「谁叠上来的」用 */
     layers: () => exprLayers.map((l) => ({ name: l.name, source: l.source, params: l.params.length })),
 
