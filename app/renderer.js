@@ -18,6 +18,20 @@ const $ = (s) => document.querySelector(s)
 const perf = createProfiler()
 const TOGGLE_SET = new Set(['胸口衣服', '裙子切换', '脱鞋', '尾巴开关'])
 
+/**
+ * 分区互动时的嘴形（情绪覆盖）。
+ * 表情包只驱动眼/脸，嘴由 mouth.js 单独驱动 —— 所以「被摸到哪个部位」的差别主要靠这里表达。
+ * 字段是**相对待机嘴的偏移**：open 张开、form 嘴形（负=下撇/嫌弃，正=笑）、smile 嘴角、funnel 圆唇。
+ */
+const REGION_MOUTH = {
+  胸: { open: 0.04, form: -0.45, ms: 2400 },
+  腰: { open: 0.10, form: -0.35, ms: 2600 },
+  裙摆: { open: 0.08, form: -0.62, ms: 3200 },          // 嫌弃：嘴角下撇、不情愿地微张嘴
+  腿: { open: 0.26, form: 0.10, funnel: 0.30, ms: 2600 }, // 发晕：嘴微微张开、有点呆
+  脚: { open: 0.50, form: 0.55, smile: 0.85, ms: 3200 },  // 被挠痒：忍不住笑出来
+  头: { open: 0.10, form: 0.22, smile: 0.30, ms: 2200 },
+}
+
 /** 浏览器里打开 /app/ 时没有 Electron 预加载：给一套空壳，方便无头验证渲染 */
 const shell = window.shell || {
   get: async () => ({ width: 520, height: 760, zoom: 1, gaze: true, strength: 1, alwaysOnTop: false, clickThrough: false }),
@@ -27,8 +41,6 @@ const shell = window.shell || {
   resizeBegin: () => {},
   resizeMove: () => {},
   resizeEnd: () => {},
-  dragBegin: () => {},
-  dragEnd: () => {},
   panel: () => {},
   center: () => {},
   quit: () => {},
@@ -188,12 +200,11 @@ async function bootStage() {
 
   /**
    * 窗口/角色的位移加速度 → 惯性冲击。
-   * 拖动窗口时（左键搬窗、中键搬运都由主进程 setPosition 驱动），角色的头发、耳环、
+   * 拖动窗口时（左键按住角色搬窗），角色的头发、耳环、
    * 裙摆会「被甩」——这才是拖动时最出效果的那一下。窗口坐标变化由 screenX/Y 读到。
    */
   const updateMotion = (dtMs) => {
     // 用「角色在屏幕上的位置」做微分：窗口被搬 + 角色在窗口内被挪，两条路都能触发惯性。
-    // 只取窗口坐标的话，面板开着中键挪角色时物理完全不动（角色在窗口里移动，窗口没动）。
     const x = window.screenX + (state.stage?.model?.position?.x || 0)
     const y = window.screenY + (state.stage?.model?.position?.y || 0)
     if (motionState.x == null) { motionState.x = x; motionState.y = y; return }
@@ -264,6 +275,14 @@ async function bootStage() {
     flap(side = 'L', amp = 1) { state.life?.flap(side, amp) },
     life: () => state.life?.state() ?? null,
     talk(v = 0) { state.mouth?.speak(v) },
+    /** 直接触发某个部位的情绪嘴形（截图/验证用，等价于摸到那个部位） */
+    mood(name) {
+      const m = REGION_MOUTH[name]
+      if (m) state.mouth?.setMood(m, m.ms)
+      return m ? { name, ...m } : null
+    },
+    moods: () => Object.keys(REGION_MOUTH),
+    clearMood() { state.mouth?.clearMood() },
     mouth: () => state.mouth?.state() ?? null,
     earNow: () => ['LEar1', 'LEar2', 'LEar3', 'REar1', 'ParamMouthOpenY', 'LeanInput', 'ParamAngleZ']
       .map((id) => `${id}=${Math.round((state.stage.param.get(id) || 0) * 100) / 100}`).join(' '),
@@ -409,8 +428,7 @@ async function bootStage() {
   shell.onCursor?.((p) => { if (!window.__noDesktopGaze) lookFromClient(p.x, p.y) })
 }
 
-/** 捏脸时的表情反馈：＞＜ + 脸红（独立 source，松手整组撤掉，不干扰分区反应） */
-const PINCH_EXPRS = ['＞＜', '脸红']
+/** 捏脸时的表情反馈：＞＜ + 脸红（独立 source，松手整组撤掉，不干扰分区反应） */const PINCH_EXPRS = ['＞＜', '脸红']
 function pinchExpressions(on) {
   if (!state.layers) return
   if (!on) { state.layers.removeSource('pinch'); return }
@@ -500,7 +518,12 @@ function bootRegions() {
     onEvent: (ev) => {
       const name = ev.region?.name
       if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
-      if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) state.reactions.apply(ev.region, 'pet')
+      if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) {
+        state.reactions.apply(ev.region, 'pet')
+        // 摸到不同部位，嘴给一个对应的情绪（表情包只改眼/脸，嘴是我们这层驱动的）
+        const mood = REGION_MOUTH[name]
+        if (mood) state.mouth?.setMood(mood, mood.ms)
+      }
       // 被点/被摸的时候，耳朵跟着扑棱一下（平时它自己每 6~13 秒也会扑棱）
       if (name === '头' && (ev.type === 'tap' || (ev.type === 'pet' && ev.step === 1))) {
         state.life?.flap(Math.random() < 0.5 ? 'L' : 'R', 1)
@@ -923,65 +946,9 @@ function setPanelExpanded(open) {
 
 function bindWindowDrag() {
   const stage = $('#stage')
-  // 左键按住角色拖 = 搬窗口（按在分区上不算）；中键另有一套（见 bindMiddleDrag）
+  // 左键按住角色拖 = 搬窗口（按在分区上不算）。中键那套（搬窗 / 挪角色）已移除：
+  // 手感调不稳定、收益也有限，留着只会多一条要维护的交互路径。
   dragWindow(stage, { canStart: (e) => !state.regionInput?.pressed?.region && bodyAt(e.clientX, e.clientY) })
-  bindMiddleDrag(stage)
-}
-
-/**
- * 中键拖动：
- *   - 设置面板关着 → 搬窗口
- *   - 设置面板开着 → 把角色在窗口里挪（改模型偏移，等于调「角色相对界面的位置」）
- * 偏移在松手时写进 settings，下次启动直接还原。
- */
-function bindMiddleDrag(stage) {
-  let st = null
-  stage.addEventListener('pointerdown', (e) => {
-    if (e.button !== 1) return
-    e.preventDefault()
-    hideTools()
-    const panelOpen = !$('#panel').classList.contains('hidden')
-    const v = state.viewport.view
-    st = {
-      mode: panelOpen ? 'model' : 'window',
-      x: e.screenX,
-      y: e.screenY,
-      o: { offsetX: v.offsetX, offsetY: v.offsetY },
-    }
-    // 窗口模式交给主进程：按全局光标锚点搬，指针事件坐标怎么抖都不会累积偏移
-    if (!panelOpen) { state.windowDragging = true; shell.dragBegin() }
-    try { stage.setPointerCapture(e.pointerId) } catch {}
-  })
-  stage.addEventListener('pointermove', (e) => {
-    if (!st) return
-    const dx = e.screenX - st.x
-    const dy = e.screenY - st.y
-    // 窗口模式：主进程按光标锚点搬，这里不再算增量（避免累积漂移）
-    if (st.mode === 'window') return
-    const w = Math.max(1, window.innerWidth)
-    const h = Math.max(1, window.innerHeight)
-    const clampOff = (v) => Math.max(-0.9, Math.min(0.9, v))
-    state.viewport.set({
-      offsetX: clampOff(st.o.offsetX + (2 * dx) / w),
-      offsetY: clampOff(st.o.offsetY + (2 * dy) / h),
-    })
-  })
-  const end = (e) => {
-    if (!st) return
-    const mode = st.mode
-    st = null
-    try { stage.releasePointerCapture(e.pointerId) } catch {}
-    if (mode === 'model') {
-      const v = state.viewport.view
-      shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
-      refreshMask(true)
-    } else {
-      state.windowDragging = false
-      shell.dragEnd()
-    }
-  }
-  stage.addEventListener('pointerup', end)
-  stage.addEventListener('pointercancel', end)
 }
 
 // ---------- 右键弹窗：设置 / 退出（固定窗口右上角，不挡角色） ----------

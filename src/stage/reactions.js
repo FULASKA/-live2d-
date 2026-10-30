@@ -14,9 +14,9 @@ export const DEFAULT_REACTIONS = {
   胸: { tap: { toggle: '胸口衣服' }, pet: { expr: ['屑屑眼'] } },
   腰: { tap: { expr: ['＞＜'] }, pet: { expr: ['＞＜', '流泪', '流冷汗'] } },
   裙摆: { tap: { toggle: '裙子切换' }, pet: { expr: ['黑脸', '屑屑眼', '竖食指开'] } },
-  腿: { tap: { expr: ['加载'] }, pet: { expr: ['加载', '脸红'] } },
-  // 大笑本模型没有预设（理论上靠面捕皮，未做），脚部滑动只到流泪
-  脚: { tap: { toggle: '脱鞋' }, pet: { expr: ['流泪'] } },
+  腿: { tap: { expr: ['加载'] }, pet: { expr: ['加载', '脸红', '圈圈眼'] } },
+  // 摸脚 = 被挠痒：＞＜（眼睛挤起来笑）+ 脸红；嘴部的笑意由 mouth 情绪层补
+  脚: { tap: { toggle: '脱鞋' }, pet: { expr: ['＞＜', '脸红'] } },
   尾巴: { tap: { toggle: '尾巴开关' } },
 }
 

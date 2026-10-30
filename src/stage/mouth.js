@@ -57,6 +57,18 @@ export function createMouth({ param, options = {} } = {}) {
   let sylFunnel = 0      // 当前音节的圆唇
   let open = 0.02        // 当前开合（平滑后）
   let talking = false
+  // 情绪覆盖：分区互动触发（嫌弃/晕/被挠痒），在待机嘴上叠一层，带淡入淡出
+  let mood = null        // { open, form, smile, funnel, pucker, t0, ms }
+
+  /**
+   * 临时情绪嘴形。字段都用「相对待机嘴的偏移」表示，没写的项保持不变。
+   * @param {{open?:number, form?:number, smile?:number, funnel?:number, pucker?:number}} spec
+   * @param {number} ms 持续时间（含淡入淡出）
+   */
+  function setMood(spec = {}, ms = 2600) {
+    mood = { ...spec, t0: performance.now(), ms: Math.max(300, ms) }
+  }
+  function clearMood() { mood = null }
 
   /** 说话能量 0..1（每帧喂；不喂则自动衰减到 0） */
   function speak(v) { levelTarget = clamp(Number(v) || 0, 0, 1) }
@@ -99,12 +111,28 @@ export function createMouth({ param, options = {} } = {}) {
     add('MouthSmile_R', cfg.smileAmp * (0.5 + 0.5 * Math.sin(phase * 0.7 + 0.9)))
     add('ParamMouthForm', cfg.formAmp * Math.sin(phase * 0.9 + 1.1) + sylForm * level * 0.7)
     add('MouthFunnel', sylFunnel * level * 0.8)
+
+    // 情绪层：淡入 140ms / 保持 / 淡出 320ms
+    if (mood) {
+      const age = performance.now() - mood.t0
+      if (age >= mood.ms) mood = null
+      else {
+        const inK = Math.min(1, age / 140)
+        const outK = Math.min(1, Math.max(0, (mood.ms - age) / 320))
+        const k = Math.min(inK, outK)
+        if (mood.open) add('ParamMouthOpenY', mood.open * k)
+        if (mood.form) add('ParamMouthForm', mood.form * k)
+        if (mood.smile) { add('MouthSmile_L', mood.smile * k); add('MouthSmile_R', mood.smile * k) }
+        if (mood.funnel) add('MouthFunnel', mood.funnel * k)
+        if (mood.pucker) add('Mouthpucker', mood.pucker * k)
+      }
+    }
   }
 
   return {
-    apply, speak, stop,
+    apply, speak, stop, setMood, clearMood,
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
-    state: () => ({ level: Math.round(level * 100) / 100, open: Math.round(open * 1000) / 1000, syl: Math.round(syl * 100) / 100, talking }),
+    state: () => ({ level: Math.round(level * 100) / 100, open: Math.round(open * 1000) / 1000, syl: Math.round(syl * 100) / 100, talking, mood: !!mood }),
   }
 }
