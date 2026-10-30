@@ -1,0 +1,13 @@
+{
+  "name": "live2d-stage",
+  "version": "0.1.0-dev",
+  "private": true,
+  "type": "module",
+  "description": "协作工作台的角色演出层：透明窗口、双路动作控制、分区互动、关键帧动画。开发期只做接口。",
+  "scripts": {
+    "serve": "node scripts/serve.mjs",
+    "core": "node scripts/fetch-core.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}
