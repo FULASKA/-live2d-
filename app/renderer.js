@@ -219,6 +219,33 @@ function bootRegions() {
     state.store.save(key)
   }
 
+  // 左/右脸热区要**跟着变形走**：前倾这类动作会让脸整体下移，
+  // 热区若固定在初始位置就会「摸脸点到胸」。这里按当前蒙皮顶点周期重算（只改内存，不改存档）。
+  function startFaceRegionTracking(partNames) {
+  let last = 0
+  setInterval(() => {
+    const now = performance.now()
+    if (now - last < 120) return
+    last = now
+    const cur = state.store.all.filter((r) => r.name === '左脸' || r.name === '右脸')
+    if (cur.length !== 2) return
+    let fresh = []
+    try {
+      fresh = faceRegions({
+        core: state.stage.core,
+        internalModel: state.stage.model.internalModel,
+        displayNames: partNames,
+        canvas: state.stage.modelSize(),
+      })
+    } catch { return }
+    if (fresh.length !== 2) return
+    for (const r of cur) {
+      const f = fresh.find((x) => x.name === r.name)
+      if (f) r.points = f.points
+    }
+  }, 120)
+}
+
   state.regionInput = createRegionInput({
     store: state.store,
     viewport: state.viewport,
@@ -262,6 +289,7 @@ function bootRegions() {
     },
   })
   state.regionInput.attach($('#stage'))
+  startFaceRegionTracking(names)
 }
 
 /** 通用「按住拖动 = 搬窗口」绑定 */
@@ -426,6 +454,26 @@ function bindPassThrough() {
     },
     tryLean: () => toggleLean(),
     cheekTest: (s) => state.facePinch?.test(s),
+    faceVerts: () => {
+      // 「脸」部件所有网格顶点的平均坐标（看变形是否真的动）
+      const core = state.stage.core
+      const im = state.stage.model.internalModel
+      let sx = 0, sy = 0, n2 = 0
+      const n = core.getDrawableCount()
+      for (let i = 0; i < n; i++) {
+        let parent = -1
+        try { parent = core.getDrawableParentPartIndex(i) } catch { continue }
+        if (parent < 0) continue
+        let name = ''
+        try { name = state.caps.parts.find((p) => p.id === core.getPartId(parent).getString().s)?.name || '' } catch {}
+        if (!/^脸$|^脸底$/.test(name)) continue
+        let v = null
+        try { v = im.getDrawableVertices(i) } catch { continue }
+        if (!v) continue
+        for (let k = 0; k < v.length; k += 2) { sx += v[k]; sy += v[k + 1]; n2++ }
+      }
+      return n2 ? { x: Math.round(sx / n2), y: Math.round(sy / n2), n: n2 } : null
+    },
     regionAt: (x, y) => regionAtClient(x, y)?.name ?? null,
     regionCenter: (name) => {
       const r = state.store?.all?.find((x) => x.name === name)
