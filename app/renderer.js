@@ -425,6 +425,7 @@ function bindPassThrough() {
       }
     },
     tryLean: () => toggleLean(),
+    cheekTest: (s) => state.facePinch?.test(s),
     regionAt: (x, y) => regionAtClient(x, y)?.name ?? null,
     regionCenter: (name) => {
       const r = state.store?.all?.find((x) => x.name === name)

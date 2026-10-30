@@ -34,6 +34,7 @@ export function createFacePinch({ param, options = {} } = {}) {
   let target = 0
   let phase = 0
   const writes = {}
+  let testSide = null
   // 捏脸时头的跟随偏向（累积位移，松手回零）
   const push = { x: 0, y: 0 }
 
@@ -88,6 +89,14 @@ export function createFacePinch({ param, options = {} } = {}) {
   }
 
   function apply(dtMs = 1000 / 60) {
+    // 调试用：强制单边鼓脸（验证 L/R 到底对应哪边脸）
+    if (testSide) {
+      writeFrac('CheeckPuff', 1)
+      writeFrac('CheeckPuff2', 0.6)
+      writeFrac('CheeckPuffL', testSide === 'L' ? 1 : 0)
+      writeFrac('CheeckPuffR', testSide === 'R' ? 1 : 0)
+      return { mag: 1 }
+    }
     const dt = Math.max(1, dtMs) / 1000
     const k = 1 - Math.exp(-(side ? cfg.follow : cfg.releasePerSec) * dt)
     mag += (target - mag) * k
@@ -101,8 +110,11 @@ export function createFacePinch({ param, options = {} } = {}) {
     const wiggleAmt = Math.sin(phase) * m * cfg.wiggle
     if (has('CheeckPuff')) writeFrac('CheeckPuff', m * cfg.puff)
     if (has('CheeckPuff2')) writeFrac('CheeckPuff2', m * cfg.puff * 0.6)
-    if (has('CheeckPuffL')) writeFrac('CheeckPuffL', side === 'L' ? m * cfg.side : 0)
-    if (has('CheeckPuffR')) writeFrac('CheeckPuffR', side === 'R' ? m * cfg.side : 0)
+    // 左右映射是实测出来的（不是看名字）：单写 CheeckPuffL 时变化集中在**画面右半边**，
+    // 单写 CheeckPuffR 时集中在**画面左半边** —— 所以「左脸热区（画面左）」要写 R。
+    // 之前按名字对应，捏左脸却鼓右脸，就是这个原因。
+    if (has('CheeckPuffL')) writeFrac('CheeckPuffL', side === 'R' ? m * cfg.side : 0)
+    if (has('CheeckPuffR')) writeFrac('CheeckPuffR', side === 'L' ? m * cfg.side : 0)
     if (has('CheeksWiggleX')) writeAbs('CheeksWiggleX', wiggleAmt)
 
     // 头跟着被捏的方向转：脸的变化没那么明显，靠头的幅度把「怕疼跟着走」演出来
@@ -126,6 +138,7 @@ export function createFacePinch({ param, options = {} } = {}) {
 
   return {
     grab, move, release, apply,
+    test(side) { testSide = side || null },
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
     params: () => ['CheeckPuff', 'CheeckPuffL', 'CheeckPuffR', 'CheeckPuff2', 'CheeksWiggleX'].filter(has),
