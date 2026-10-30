@@ -23,14 +23,21 @@ const state = {
   },
 }
 
-/** 默认反馈：按热区名字配一套；用户可在面板里改 */
+/**
+ * 默认反馈：一个区域 × 一种手势 = 一个「动作组」。
+ * 规则：同一时刻只允许一个组在场（切换，不是叠加）；toggle 型（换装/脱鞋/尾巴）再点一次同组 = 收回。
+ * expr 数组是有序的：后加的层覆盖同参数 —— 腰部的 ＞＜→流泪→流冷汗 必须按这个顺序，
+ * 才能保住眉毛变化而不被眼睛覆盖。
+ */
 const DEFAULT_REACTIONS = {
-  头: { tap: { expression: '脸红' }, pet: { expression: '爱心眼' } },
-  胸: { tap: { expression: '＞＜' } },
-  腰: { tap: { expression: '屑屑眼' } },
-  腿: { tap: { expression: '流冷汗' } },
-  尾巴: { tap: { expression: '尾巴开关' } },
-  手: { tap: { motion: '举手切默认手' } },
+  头: { tap: { toggle: '爱心眼' }, pet: { expr: ['＞＜', '脸红'] } },
+  胸: { tap: { toggle: '胸口衣服' }, pet: { expr: ['屑屑眼'] } },
+  腰: { tap: { expr: ['＞＜'] }, pet: { expr: ['＞＜', '流泪', '流冷汗'] } },
+  裙摆: { tap: { toggle: '裙子切换' }, pet: { expr: ['黑脸', '屑屑眼', '竖食指开'] } },
+  腿: { tap: { expr: ['加载'] }, pet: { expr: ['加载', '脸红'] } },
+  // 大笑本模型没有预设（理论上得靠面捕皮，未做），所以脚部滑动只到流泪
+  脚: { tap: { toggle: '脱鞋' }, pet: { expr: ['流泪'] } },
+  尾巴: { tap: { toggle: '尾巴开关' } },
 }
 
 function pushLog(kind, text) {
@@ -62,7 +69,16 @@ async function bootStage() {
       verbose: new URLSearchParams(location.search).has('verbose'),
     })
     state.stage = stage
-    state.layers = createLayerStack({ param: stage.param, part: stage.part })
+    // 物理输入清单：前倾 / 换装这类表情写的是物理输入参数，必须早于 physics.evaluate 写入
+    state.physics = await loadPhysicsFlow()
+    state.layers = createLayerStack({
+      param: stage.param,
+      part: stage.part,
+      // 只把「物理输入且不是物理输出」的参数走前写点；
+      // ParamAngle* / ParamBodyAngle* 这类既入又出的参数仍按旧路径写，避免被物理回算冲掉
+      isPhysicsInput: (id) => state.physics.inputs.has(id) && !state.physics.outputs.has(id),
+    })
+    stage.onBeforePhysics(() => state.layers.applyPhysics())
     const q0 = new URLSearchParams(location.search)
     state.gaze = createGaze({
       param: stage.param,
@@ -283,18 +299,76 @@ function onRegionEvent(ev) {
   }
 }
 
+/**
+ * 读 physics3.json 的输入/输出清单。
+ * 物理输入必须早于 physics.evaluate 写（engine.onBeforePhysics）；
+ * 既入又出的参数（ParamAngle* / ParamBodyAngle*）仍走旧路径，免得被物理回算冲掉。
+ */
+async function loadPhysicsFlow() {
+  const empty = { inputs: new Set(), outputs: new Set() }
+  try {
+    const modelUrl = new URL(state.caps.model.url, location.href).href
+    const model = await fetch(modelUrl).then((r) => r.json())
+    const rel = model?.FileReferences?.Physics
+    if (!rel) return empty
+    const phys = await fetch(new URL(rel, modelUrl).href).then((r) => r.json())
+    const inputs = new Set()
+    const outputs = new Set()
+    for (const s of phys.PhysicsSettings || []) {
+      for (const i of s.Input || []) if (i?.Source?.Id) inputs.add(i.Source.Id)
+      for (const o of s.Output || []) if (o?.Destination?.Id) outputs.add(o.Destination.Id)
+    }
+    pushLog('inspect', `物理输入 ${inputs.size} · 输出 ${outputs.size}（前倾类表情走前写点）`)
+    return { inputs, outputs }
+  } catch (e) {
+    pushLog('warn', `物理清单读不到：${e.message}`)
+    return empty
+  }
+}
+
+// ---------- 分区互动：动作组（切换，不叠加） ----------
+const REACTION_SOURCE = 'reaction'
+const REACTION_TTL = 6000
+const active = { group: null, timer: 0 }
+
+/** 把当前动作组整个撤掉（表情层按 source 清，其它层不动） */
+function clearReactionGroup(reason) {
+  if (active.timer) { clearTimeout(active.timer); active.timer = 0 }
+  const removed = state.layers?.removeSource(REACTION_SOURCE) || []
+  active.group = null
+  if (removed.length) {
+    renderExprChips()
+    pushLog('expr', `− ${removed.join(' + ')}${reason ? `（${reason}）` : ''}`)
+  }
+}
+
 function applyReaction(region, kind) {
-  const rx = region?.reaction?.[kind]
+  if (!region) return
+  const rx = region.reaction?.[kind] || DEFAULT_REACTIONS[region.name]?.[kind]
   if (!rx) return
-  if (rx.expression) {
-    addExpression(rx.expression, { fade: 0.2 })
-    setTimeout(() => removeExpression(rx.expression), 4500)
+  const gid = `${region.name}:${kind}`
+
+  // 同一个开关组再点一次 → 收回（换装 / 脱鞋 / 尾巴这类）
+  if (active.group === gid && rx.toggle) {
+    clearReactionGroup('再点收回')
+    pushLog('region', `${region.name} · ${kind} → 收回 ${rx.toggle}`)
+    return
+  }
+  // 不同动作组：先把上一组整个撤掉，再上新组 —— 这就是「切换而不叠加」
+  if (active.group) clearReactionGroup('切换动作组')
+  active.group = gid
+
+  const added = []
+  if (rx.toggle && addExpression(rx.toggle, { source: REACTION_SOURCE })) added.push(rx.toggle)
+  for (const name of rx.expr || (rx.expression ? [rx.expression] : [])) {
+    if (addExpression(name, { source: REACTION_SOURCE })) added.push(name)
   }
   if (rx.motion) {
     const m = state.caps.motions.find((x) => x.name === rx.motion)
     if (m) playMotion(m)
   }
-  pushLog('region', `${region.name} · ${kind} → ${rx.expression || rx.motion || '（空）'}`)
+  pushLog('region', `${region.name} · ${kind} → ${added.join(' + ') || (rx.motion || '（无预设）')}`)
+  if (!rx.toggle) active.timer = setTimeout(() => clearReactionGroup('到时'), REACTION_TTL)
 }
 
 function saveProfile() {
@@ -304,21 +378,28 @@ function saveProfile() {
 function renderRegions() {
   const list = (state.store?.all || []).slice().sort((a, b) => b.z - a.z)
   $('#n-region').textContent = list.length
+  // 开关型表情（换装/脱鞋/尾巴）用 toggle 语义，其余按纯表情组
+  const TOGGLE_SET = new Set(['胸口衣服', '裙子切换', '脱鞋', '尾巴开关'])
   const opts = (sel) => ['（无）', ...state.caps.expressions.map((e) => e.name)]
     .map((n) => `<option value="${n === '（无）' ? '' : n}" ${(sel || '') === (n === '（无）' ? '' : n) ? 'selected' : ''}>${n}</option>`).join('')
+  const tapOf = (r) => r.reaction?.tap?.toggle || (r.reaction?.tap?.expr || [])[0] || ''
+  const petOf = (r) => (r.reaction?.pet?.expr || []).join('+')
 
   $('#regions').innerHTML = list.map((r) => `
     <div class="item" data-r="${r.id}" style="gap:6px">
-      <span class="nm" style="flex:0 0 52px">${r.name}</span>
-      <select data-exp="${r.id}" style="flex:1;min-width:0;background:#12141a;border:1px solid var(--line);border-radius:5px;color:var(--fg);font-size:11px">${opts(r.reaction?.tap?.expression)}</select>
+      <span class="nm" style="flex:0 0 46px">${r.name}</span>
+      <select data-exp="${r.id}" title="点击反应" style="flex:1;min-width:0;background:#12141a;border:1px solid var(--line);border-radius:5px;color:var(--fg);font-size:11px">${opts(tapOf(r))}</select>
+      <span class="tag" data-pet="${r.id}" title="滑动反应" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${petOf(r) || '—'}</span>
       <span class="chip ghost" data-del="${r.id}" title="删除">×</span>
     </div>`).join('') || '<div class="meta">还没有热区，点「自动铺热区」或用「画区域」自己画</div>'
 
   $('#regions').querySelectorAll('[data-exp]').forEach((el) => (el.onchange = () => {
     const r = state.store.all.find((x) => x.id === el.dataset.exp)
-    r.reaction = { ...(r.reaction || {}), tap: { expression: el.value || undefined } }
+    const name = el.value
+    if (!name) { delete r.reaction.tap }
+    else r.reaction.tap = TOGGLE_SET.has(name) ? { toggle: name } : { expr: [name] }
     saveProfile()
-    pushLog('region', `${r.name} 点击 → ${el.value || '（无）'}`)
+    pushLog('region', `${r.name} 点击 → ${name || '（无）'}`)
   }))
   $('#regions').querySelectorAll('[data-del]').forEach((el) => (el.onclick = () => {
     state.store.remove(el.dataset.del)
@@ -370,8 +451,7 @@ function drawOverlay() {
 
   const hovered = state.regionInput?.hovered
   const pressed = state.regionInput?.pressed?.region
-  const path = (points) => {
-    ctx.beginPath()
+  const trace = (points) => {
     points.forEach(([mx, my], i) => {
       const p = state.viewport.modelToScreen(mx, my)
       if (i === 0) ctx.moveTo(p.x, p.y)
@@ -382,9 +462,12 @@ function drawOverlay() {
 
   for (const r of state.store.all) {
     const on = r === hovered || r === pressed
-    path(r.points)
+    ctx.beginPath()
+    trace(r.points)
+    for (const h of r.holes || []) trace(h)
     ctx.fillStyle = on ? 'rgba(120,180,255,0.16)' : 'rgba(120,180,255,0.05)'
-    ctx.fill()
+    // evenodd：洞（与其它热区的交集）要真的空出来，不是盖上去
+    ctx.fill('evenodd')
     ctx.lineWidth = on ? 2 : 1
     ctx.strokeStyle = on ? 'rgba(150,200,255,0.95)' : 'rgba(120,170,230,0.5)'
     ctx.stroke()
@@ -397,7 +480,8 @@ function drawOverlay() {
   }
 
   if (state.editor.points.length) {
-    path(state.editor.points)
+    ctx.beginPath()
+    trace(state.editor.points)
     ctx.strokeStyle = '#ffd166'
     ctx.lineWidth = 2
     ctx.stroke()
@@ -437,10 +521,10 @@ async function playMotion(m) {
 }
 
 // ---------- 表情叠加（L2） ----------
-function addExpression(name, { fade = 0.3 } = {}) {
+function addExpression(name, { fade = 0.3, source = 'manual' } = {}) {
   const def = state.caps.expressions.find((e) => e.name === name)
   if (!def) { pushLog('warn', `没有表情：${name}`); return false }
-  const ok = state.layers.addExpression(name, def.params, { fade })
+  const ok = state.layers.addExpression(name, def.params, { fade, source })
   if (ok) pushLog('expr', `+ ${name}（${def.params.length} 参数）`)
   renderExprChips()
   return ok
@@ -489,7 +573,7 @@ function sendState(s) {
 }
 
 // ---------- 可复现钩子 ----------
-// ?expr=…&motion=2&param=…&steps=30&hit=x,y&regionhit=x,y&tap=x,y&hidepart=…
+// ?expr=…&motion=2&param=…&steps=30&hit=x,y&regionhit=x,y&tap=x,y&reaction=头:tap;腰:tap&hidepart=…
 function applyDeepLink() {
   const q = new URLSearchParams(location.search)
   const { stage, layers, viewport } = state
@@ -525,6 +609,16 @@ function applyDeepLink() {
   if (q.get('offset')) {
     const [ox = 0, oy = 0] = q.get('offset').split(',').map(Number)
     viewport.set({ offsetX: ox, offsetY: oy })
+  }
+
+  // 分区动作组回归：?reaction=头:tap;腰:tap（按顺序触发，用来验证「切换不叠加」）
+  if (q.get('reaction')) {
+    for (const spec of q.get('reaction').split(';').filter(Boolean)) {
+      const [name, kind = 'tap'] = spec.split(':')
+      const r = state.store.all.find((x) => x.name === name)
+      if (r) applyReaction(r, kind)
+      else pushLog('warn', `没有热区：${name}`)
+    }
   }
 
   // 热区命中反查（屏幕坐标，相对 stage 左上角）：标定/回归用

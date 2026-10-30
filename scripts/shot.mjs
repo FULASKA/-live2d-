@@ -8,7 +8,7 @@
 //   node scripts/shot.mjs --url "http://127.0.0.1:53180/harness/?expr=流泪,脸红" \
 //        --out tmp/shot.png --probe "expr,conflicts" [--wait 25000] [--eval "js"]
 import puppeteer from 'puppeteer-core'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 
 const arg = (k, d) => {
@@ -19,12 +19,14 @@ const URL_ = arg('url', 'http://127.0.0.1:53180/harness/')
 const OUT = arg('out', 'tmp/shot.png')
 const WAIT = Number(arg('wait', 30000))
 const EVAL = arg('eval', '')
+const EVALFILE = arg('evalfile', '')
 const MOUSE = arg('mouse', '')
 const CLICK = arg('click', '')
 const KEY = arg('key', '')
 const DRAG = arg('drag', '')
 const W = Number(arg('width', 1280))
 const H = Number(arg('height', 800))
+const EVAL_SRC = EVALFILE ? readFileSync(EVALFILE, 'utf8') : EVAL
 
 const BROWSERS = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -116,7 +118,7 @@ const main = async () => {
       }
       if (extra) { try { out.extra = eval(extra) } catch (e) { out.evalError = String(e) } }
       return out
-    }, EVAL)
+    }, EVAL_SRC)
 
     mkdirSync(path.dirname(OUT), { recursive: true })
     await page.screenshot({ path: OUT })

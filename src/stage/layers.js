@@ -7,11 +7,15 @@
  *   （流泪 + 脸红 + 黑框眼镜 可以同时成立），只有眼型组 key3–key6 因为各自清零互斥。
  *   所以表情不能走内核通道，必须自己按「层」叠：后加入的层覆盖同参数，不同参数照旧叠加。
  *
- * 叠加点：内核在 coreModel.update() 之前一刻发 beforeModelUpdate —— 这是最后一处能改参数的时机。
+ * 两个写点（顺序由内核决定，不能合并）：
+ *   1. applyPhysics() —— 物理输入参数（LeanInput / Clothes* / Movement*）必须在 physics.evaluate 之前写。
+ *      写晚了物理已经算完，只有直接绑参数的网格会动，链条不响应（前倾就是这样错的）。
+ *   2. apply() —— 其余参数，在 beforeModelUpdate（coreModel.update 之前一刻）写。
+ *
  * 帧计数而不是墙钟计时：无头/虚拟时钟下 performance.now() 会冻住，按帧算才可复现。
  */
 
-export function createLayerStack({ param, part }) {
+export function createLayerStack({ param, part, isPhysicsInput = () => false } = {}) {
   /** 表情层：数组顺序即优先级，后面的同参数覆盖前面的 */
   const exprLayers = []
   /** L5：被外部（面板 / Agent 协议 / 动画编辑器）钉住的参数，永远最上层 */
@@ -26,11 +30,22 @@ export function createLayerStack({ param, part }) {
     return cur + (value - cur) * k
   }
 
+  /** 写一个表情参数；k 是淡入进度 */
+  const writeParam = (p, k) => {
+    const cur = param.get(p.Id)
+    if (cur == null) return
+    param.set(p.Id, blendValue(cur, p.Value ?? 0, p.Blend, k))
+  }
+
+  /** 淡入系数：按帧算，无头环境也一致 */
+  const fadeOf = (layer, f) =>
+    layer.fadeFrames > 0 ? Math.min(1, Math.max(0, (f - layer.t0) / layer.fadeFrames)) : 1
+
   const api = {
-    /** 加一层表情。同名已在层里则忽略（幂等，便于协议重发） */
-    addExpression(name, params = [], { fade = 0.3, fps = 60 } = {}) {
+    /** 加一层表情。同名已在层里则忽略（幂等，便于协议重发）。source 用来整组切换/清除 */
+    addExpression(name, params = [], { fade = 0.3, fps = 60, source = 'manual' } = {}) {
       if (exprLayers.some((l) => l.name === name)) return false
-      exprLayers.push({ name, params, t0: frame, fadeFrames: Math.max(0, fade) * fps })
+      exprLayers.push({ name, params, t0: frame, fadeFrames: Math.max(0, fade) * fps, source })
       return true
     },
     removeExpression(name) {
@@ -38,6 +53,18 @@ export function createLayerStack({ param, part }) {
       if (i < 0) return false
       exprLayers.splice(i, 1)
       return true
+    },
+    /**
+     * 清掉某个来源的全部表情层，返回被清的名字。
+     * 分区互动的「不同动作组切换而不叠加」就靠它：新组进来前先按 source 整组清空。
+     */
+    removeSource(source) {
+      const removed = []
+      for (let i = exprLayers.length - 1; i >= 0; i--) {
+        if (exprLayers[i].source !== source) continue
+        removed.unshift(exprLayers.splice(i, 1)[0].name)
+      }
+      return removed
     },
     toggleExpression(name, params, opts) {
       return api.removeExpression(name) || api.addExpression(name, params, opts)
@@ -49,6 +76,8 @@ export function createLayerStack({ param, part }) {
     },
     hasExpression: (name) => exprLayers.some((l) => l.name === name),
     expressions: () => exprLayers.map((l) => l.name),
+    /** 当前每层的来源，排查「谁叠上来的」用 */
+    layers: () => exprLayers.map((l) => ({ name: l.name, source: l.source, params: l.params.length })),
 
     /** L5：钉住一个参数（值是最终值，直接覆盖叠加结果） */
     hold(id, value) {
@@ -71,20 +100,40 @@ export function createLayerStack({ param, part }) {
     clearParts() { partOverride.clear() },
 
     /**
+     * 物理输入：必须在 physics.evaluate 之前写（engine.onBeforePhysics 里调用）。
+     * 只写 isPhysicsInput 命中的参数，其余交给 apply()，不会重复写。
+     */
+    applyPhysics() {
+      const f = frame + 1
+      for (const layer of exprLayers) {
+        const k = fadeOf(layer, f)
+        for (const p of layer.params) {
+          if (!isPhysicsInput(p.Id)) continue
+          writeParam(p, k)
+        }
+      }
+      for (const [id, v] of held) {
+        if (isPhysicsInput(id)) param.set(id, v)
+      }
+    },
+
+    /**
      * 每帧调用（在 beforeModelUpdate 时刻）。顺序即优先级：
      * 表情层（按加入顺序）→ L5 受控参数 → 部件覆盖
      */
     apply() {
       frame += 1
       for (const layer of exprLayers) {
-        const k = layer.fadeFrames > 0 ? Math.min(1, Math.max(0, (frame - layer.t0) / layer.fadeFrames)) : 1
+        const k = fadeOf(layer, frame)
         for (const p of layer.params) {
-          const cur = param.get(p.Id)
-          if (cur == null) continue
-          param.set(p.Id, blendValue(cur, p.Value ?? 0, p.Blend, k))
+          if (isPhysicsInput(p.Id)) continue
+          writeParam(p, k)
         }
       }
-      for (const [id, v] of held) param.set(id, v)
+      for (const [id, v] of held) {
+        if (isPhysicsInput(id)) continue
+        param.set(id, v)
+      }
       for (const [id, v] of partOverride) part.set(id, v)
     },
 
@@ -98,7 +147,7 @@ export function createLayerStack({ param, part }) {
       const conflicts = [...touched.entries()].filter(([, ls]) => ls.length > 1)
       return {
         frame,
-        layers: exprLayers.map((l) => ({ name: l.name, params: l.params.length })),
+        layers: exprLayers.map((l) => ({ name: l.name, source: l.source, params: l.params.length })),
         conflictParams: conflicts.map(([id, ls]) => ({ id, layers: ls })),
         held: [...held.keys()],
         parts: [...partOverride.keys()],

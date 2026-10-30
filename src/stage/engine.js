@@ -122,6 +122,33 @@ export async function createStage(o = {}) {
     }
   })
 
+  // ---------- 物理输入写点：必须早于 physics.evaluate ----------
+  // 内核顺序是 … → physics.evaluate() → pose → beforeModelUpdate → coreModel.update()。
+  // 也就是说 beforeModelUpdate 写在物理「之后」，写 LeanInput 这类**物理输入**参数时
+  // 物理已经算完了：只有直接绑在参数上的网格会动，物理链条不响应 —— 表现就是「歪得不完整」。
+  // （实测本模型：前倾表情 = LeanInput -30，物理里有 19 处引用。）
+  // 这里包一层 physics.evaluate，把物理输入在它之前写进去。
+  const beforePhysicsHooks = new Set()
+  let physicsHooked = false
+  const hookPhysics = (phys) => {
+    if (!phys || physicsHooked || typeof phys.evaluate !== 'function') return
+    physicsHooked = true
+    const origEvaluate = phys.evaluate
+    phys.evaluate = function (m, dt) {
+      for (const fn of beforePhysicsHooks) {
+        try { fn() } catch (e) { console.error('[layer] physics hook 失败', e) }
+      }
+      return origEvaluate.call(this, m, dt)
+    }
+  }
+  hookPhysics(internal.physics)
+  const origInternalUpdate = internal.update
+  internal.update = function (dt, now) {
+    // physics3.json 是加载期异步挂上来的，第一次更新时再兜一次
+    if (!physicsHooked && internal.physics) hookPhysics(internal.physics)
+    return origInternalUpdate.call(this, dt, now)
+  }
+
   const clocks = { ms: 0, frames: 0 }
 
   /** 推进时钟（内核在渲染时才真正消费 delta） */
@@ -258,6 +285,8 @@ export async function createStage(o = {}) {
     stop: () => app.stop(),
     ticker: app.ticker,
     onBeforeUpdate(fn) { beforeHooks.add(fn); return () => beforeHooks.delete(fn) },
+    /** 在 physics.evaluate 之前一刻调用（物理输入参数必须在这里写） */
+    onBeforePhysics(fn) { beforePhysicsHooks.add(fn); return () => beforePhysicsHooks.delete(fn) },
     motion, stopMotions, setExpression,
     modelSize, size, resize, toModel, hitTest, sampleAlpha,
     focus: (x, y, instant) => model.focus(x, y, instant),
