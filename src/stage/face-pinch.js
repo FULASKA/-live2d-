@@ -16,8 +16,10 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
 export function createFacePinch({ param, options = {} } = {}) {
   const cfg = {
-    maxPull: 260,        // 拖动多少像素算拉满（原 150：稍一拖就到顶，没有「越捏越大」的层次）
-    curvePow: 0.62,      // 响应曲线：前段更跟手（pow<1），拖一点就有反应
+    maxPull: 260,        // 拖动多少像素算拉满
+    // 响应曲线 pow>1：**前段更钝**。原来 0.62 时轻拖 30px 就跳到 35%，
+    // 想要的是「轻轻捏一下只有一点点变化」，所以让位移和效果在前段更接近线性偏缓。
+    curvePow: 1.15,
     follow: 10,          // 跟手速度（1/s）
     releasePerSec: 4.5,  // 松手回落速度
     puff: 1,             // 整体鼓脸比例（按参数量程）
@@ -142,6 +144,24 @@ export function createFacePinch({ param, options = {} } = {}) {
     if (has('Mouthpucker')) add('Mouthpucker', m * cfg.pucker)
 
     // 头跟着被捏的方向转：脸的变化没那么明显，靠头的幅度把「怕疼跟着走」演出来
+    // （角度部分已挪到 applyPosture：物理要用到它，必须写在物理之前）
+    if (!side) {
+      const decay = Math.exp(-dt * 7)
+      push.x *= decay
+      push.y *= decay
+      if (Math.abs(push.x) < 0.3) push.x = 0
+      if (Math.abs(push.y) < 0.3) push.y = 0
+    }
+
+    return { mag: +m.toFixed(2) }
+  }
+
+  /**
+   * 姿态部分（物理之前写）：捏脸时头跟着手转。
+   * 必须在 physics.evaluate 之前 —— 头一转，模型自带的头发/耳朵物理才会跟着甩。
+   */
+  function applyPosture(dtMs = 1000 / 60) {
+    const dt = clamp(dtMs / 1000, 0.001, 0.12)
     if (!side) {
       const decay = Math.exp(-dt * 7)
       push.x *= decay
@@ -156,12 +176,10 @@ export function createFacePinch({ param, options = {} } = {}) {
       add('ParamAngleY', -hy)
       add('ParamBodyAngleZ', hz * 0.3)
     }
-
-    return { mag: +m.toFixed(2) }
   }
 
   return {
-    grab, move, release, apply, applyPhysics,
+    grab, move, release, apply, applyPhysics, applyPosture,
     test(side) { testSide = side || null },
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,

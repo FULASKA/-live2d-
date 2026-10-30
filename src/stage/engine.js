@@ -130,11 +130,13 @@ export async function createStage(o = {}) {
   // 这里包一层 physics.evaluate，把物理输入在它之前写进去。
   const beforePhysicsHooks = new Set()
   let physicsHooked = false
+  let physicsEvals = 0
   const hookPhysics = (phys) => {
     if (!phys || physicsHooked || typeof phys.evaluate !== 'function') return
     physicsHooked = true
     const origEvaluate = phys.evaluate
     phys.evaluate = function (m, dt) {
+      physicsEvals += 1
       for (const fn of beforePhysicsHooks) {
         try { fn() } catch (e) { console.error('[layer] physics hook 失败', e) }
       }
@@ -405,6 +407,16 @@ export async function createStage(o = {}) {
     onBeforeUpdate(fn) { beforeHooks.add(fn); return () => beforeHooks.delete(fn) },
     /** 每帧「画完之后」调用（掩码读回必须挂这里，不能自己再画一帧） */
     afterRender(fn) { afterRenderHooks.add(fn); return () => afterRenderHooks.delete(fn) },
+    /** 物理诊断：有没有挂上、每帧是否真的在算 */
+    physicsInfo() {
+      const p = internal.physics
+      return {
+        attached: !!p,
+        hooked: physicsHooked,
+        evals: physicsEvals,
+        settings: p && p.settings ? p.settings.length : (p?._settings?.length ?? null),
+      }
+    },
     /** 在 physics.evaluate 之前一刻调用（物理输入参数必须在这里写） */
     onBeforePhysics(fn) { beforePhysicsHooks.add(fn); return () => beforePhysicsHooks.delete(fn) },
     motion, stopMotions, setExpression,

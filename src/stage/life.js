@@ -36,16 +36,21 @@ const JEWEL = {
 
 export function createLife({ param, options = {} } = {}) {
   const cfg = {
-    windAmp: 0.035,      // 微风（头发 Y 轴）
-    windAmpX: 0.02,      // 微风（头发 X 轴）
+    windAmp: 0.045,      // 微风（头发 Y 轴）
+    windAmpX: 0.03,      // 微风（头发 X 轴）
     windSpeed: 0.55,     // 微风的基准角速度（rad/s）
-    inertiaY: 1,         // 头部俯仰速度 → 头发滞后强度
-    inertiaX: 0.85,      // 头部左右速度
+    // 头部朝向倍数：模型自带物理偏软（实测头转 30° 头发只动 0.1 量程），
+    // 这里按「当前角度」再补一层偏移，让转头时毛发有明确的方向感。
+    angleFollow: 0.012,
+    inertiaY: 2,         // 头部俯仰速度 → 头发滞后强度
+    inertiaX: 1.8,       // 头部左右速度
     earAmp: 1,           // 扑棱幅度（参数满量程的比例；+1 竖起到顶）
     earMin: 5.5,         // 自发扑棱的最短间隔（秒）
     earMax: 13,          // 最长间隔
     earTremor: 0.012,    // 耳朵常态微颤（静止时也有生命感）
     jewelAmp: 0.3,       // 耳环摆动
+    impFollow: 9,        // 拖动加速度的跟随速度（1/s）
+    impGain: 0.00012,    // 加速度 → 毛发偏移（主要是补味道；主受力交给模型的 Position 物理）
     ...options,
   }
 
@@ -77,6 +82,15 @@ export function createLife({ param, options = {} } = {}) {
   let nextFlip = cfg.earMin + Math.random() * 3
   let flips = 0
   let lastEar = 0
+  // 外部拖动加速度 → 毛发/耳环像被惯性甩出去
+  const ext = { ax: 0, ay: 0 }
+  const imp = { x: 0, y: 0, vx: 0, vy: 0 }
+
+  /** 外部冲击：窗口被拖动产生的加速度（px/s²，正右正下） */
+  function motion(ax = 0, ay = 0) {
+    ext.ax = clamp(ax, -9000, 9000)
+    ext.ay = clamp(ay, -9000, 9000)
+  }
 
   /** 耳朵扑棱一次（side: 'L' | 'R'，amp 0..1.5） */
   function flap(side = 'L', amp = 1) {
@@ -111,6 +125,17 @@ export function createLife({ param, options = {} } = {}) {
     // 惯性：往反方向拖一点，越转得快越明显
     const iy = clamp(-vel.y * 0.0012 * cfg.inertiaY, -0.32, 0.32)
     const ix = clamp(-vel.x * 0.0012 * cfg.inertiaX, -0.32, 0.32)
+    // 朝向跟随：不只是速度，角度本身也把毛发往一侧带（模型物理偏软，这里补足）
+    const fy = clamp((cy || 0) * cfg.angleFollow, -0.3, 0.3)
+    const fx = clamp(-(cx || 0) * cfg.angleFollow, -0.3, 0.3)
+    const fz = clamp(-(cz || 0) * cfg.angleFollow * 1.2, -0.3, 0.3)
+
+    // 拖动/搬窗的加速度：毛发和耳环「被甩出去」，偏移取反 → 看起来是滞后而不是随动
+    const kImp = 1 - Math.exp(-dt * cfg.impFollow)
+    imp.vx += (ext.ax - imp.vx) * kImp
+    imp.vy += (ext.ay - imp.vy) * kImp
+    const gx = clamp(-imp.vx * cfg.impGain, -0.45, 0.45)
+    const gy = clamp(-imp.vy * cfg.impGain, -0.4, 0.4)
 
     // 自发扑棱
     if (!flip) {
@@ -132,24 +157,25 @@ export function createLife({ param, options = {} } = {}) {
     }
     lastEar = earEnv
 
-    for (let i = 0; i < HAIR_Y.length; i++) add(HAIR_Y[i], wy * (0.6 + (i % 4) * 0.15) + iy)
-    for (let i = 0; i < HAIR_X.length; i++) add(HAIR_X[i], wx * (0.7 + (i % 4) * 0.12) + ix)
-    for (const id of JEWEL.L) add(id, clamp(-vel.x * 0.0009, -0.4, 0.4) * cfg.jewelAmp + wx * 0.4)
-    for (const id of JEWEL.R) add(id, clamp(-vel.x * 0.0009, -0.4, 0.4) * cfg.jewelAmp + wx * 0.4)
+    for (let i = 0; i < HAIR_Y.length; i++) add(HAIR_Y[i], wy * (0.6 + (i % 4) * 0.15) + iy + fy + gy)
+    for (let i = 0; i < HAIR_X.length; i++) add(HAIR_X[i], wx * (0.7 + (i % 4) * 0.12) + ix + fx + gx)
+    for (const id of JEWEL.L) add(id, clamp(-vel.x * 0.0009, -0.4, 0.4) * cfg.jewelAmp + wx * 0.4 + gx)
+    for (const id of JEWEL.R) add(id, clamp(-vel.x * 0.0009, -0.4, 0.4) * cfg.jewelAmp + wx * 0.4 + gx)
 
     const tremor = Math.sin(t * 7.3) * cfg.earTremor
     const eL = (earSide === 'L' ? earEnv * cfg.earAmp : 0) + tremor
     const eR = (earSide === 'R' ? earEnv * cfg.earAmp : 0) + tremor
-    EARS.L.forEach((id, i) => add(id, eL * (1 - i * 0.18))) // 越靠尖越滞后，做出鞭状
-    EARS.R.forEach((id, i) => add(id, eR * (1 - i * 0.18)))
+    EARS.L.forEach((id, i) => add(id, (eL + fz + gy * 0.6) * (1 - i * 0.18))) // 越靠尖越滞后，做出鞭状
+    EARS.R.forEach((id, i) => add(id, (eR + fz + gy * 0.6) * (1 - i * 0.18)))
   }
 
   return {
-    apply, flap,
+    apply, flap, motion,
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
     state: () => ({
       vel: { x: Math.round(vel.x), y: Math.round(vel.y), z: Math.round(vel.z) },
+      ext: { ax: Math.round(imp.vx), ay: Math.round(imp.vy) },
       flipping: !!flip,
       side: flip?.side ?? null,
       earEnv: Math.round(lastEar * 100) / 100,

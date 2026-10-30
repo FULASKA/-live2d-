@@ -20,10 +20,13 @@ export function createGaze({ param, options = {} } = {}) {
     // 实测本模型（3749×7697 画布）：ParamAngleY 满偏只带动头部约 110–148px；
     // ParamBodyAngleY（胸腔）满偏能带动头部约 450px —— 埋头/抬头真正的杠杆在身体。
     eye: 0.85,
-    head: 0.75,         // × ParamAngleX 的 30° → 22.5°
+    head: 0.9,          // × ParamAngleX 的 30° → 27°
     headRoll: 0.12,     // × 30° → 3.6°，横向看时轻微歪头
     body: 0.45,         // × 30° → 13.5°
     bodyRoll: 0.08,
+    // 响应曲线：指针在角色附近的小幅移动也给足角度（pow<1 → 前段更灵敏），
+    // 否则窗口内活动时头部几乎不动，物理链（头发/耳朵）就吃不到输入。
+    curve: 0.7,
     // 非对称：低头时身体多弯（像真的埋下头），抬头时收敛些，避免整个人往后折
     bowBoost: 1.7,      // 目标向下时，身体幅度 × 1.7
     liftDamp: 0.8,      // 目标向上时，身体幅度 × 0.8
@@ -41,6 +44,9 @@ export function createGaze({ param, options = {} } = {}) {
   const target = { x: 0, y: 0 }
   const state = { eyeX: 0, eyeY: 0, headX: 0, headY: 0, bodyX: 0, bodyY: 0 }
 
+  /** 响应曲线：保留符号，前段更灵敏 */
+  const curve = (v) => (v === 0 ? 0 : Math.sign(v) * Math.pow(Math.abs(v), cfg.curve))
+
   /** 指针屏幕坐标 → 归一化目标（-1..1，右/上为正），以角色中心为原点 */
   function setTargetFromScreen(px, py, centerX, centerY, halfW, halfH) {
     const nx = clamp((px - centerX) / (halfW || 1), -1, 1)
@@ -56,8 +62,7 @@ export function createGaze({ param, options = {} } = {}) {
     if (Math.abs(target.y) < dead) target.y = 0
   }
 
-  const add = (id, delta) => {
-    if (!delta) return
+  const add = (id, delta) => {    if (!delta) return
     const info = param.info(id)
     if (!info) return
     param.set(id, clamp(param.get(id) + delta, info.min, info.max))
@@ -68,8 +73,8 @@ export function createGaze({ param, options = {} } = {}) {
     const dt = Math.max(1, dtMs) / 1000
     const k = (damping) => 1 - Math.exp(-damping * dt)
 
-    const tx = target.x * cfg.strength
-    const ty = target.y * cfg.strength
+    const tx = curve(target.x) * cfg.strength
+    const ty = curve(target.y) * cfg.strength
 
     const ke = k(cfg.dampingEye)
     state.eyeX += (tx - state.eyeX) * ke

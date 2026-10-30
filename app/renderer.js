@@ -10,6 +10,8 @@ import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
 import { createLife } from '../src/stage/life.js'
 import { createMouth } from '../src/stage/mouth.js'
+import { createCapture } from '../src/stage/capture.js'
+import { createPosture } from '../src/stage/posture.js'
 import { createProfiler } from '../src/stage/perf.js'
 
 const $ = (s) => document.querySelector(s)
@@ -129,11 +131,7 @@ async function bootStage() {
     part: stage.part,
     isPhysicsInput: (id) => state.physics.inputs.has(id) && !state.physics.outputs.has(id),
   })
-  stage.onBeforePhysics(() => {
-    state.layers.applyPhysics()
-    // 捏脸时把身体往前带（物理输入必须写在这里，写晚了物理不会跟着动）
-    state.facePinch?.applyPhysics()
-  })
+  // （姿势与物理输入的写入点在下面统一注册：必须在物理之前）
 
   state.reactions = createReactions({
     layers: state.layers,
@@ -143,7 +141,15 @@ async function bootStage() {
 
   state.gaze = createGaze({
     param: stage.param,
-    options: { enabled: state.settings.gaze !== false, strength: Number(state.settings.strength ?? 1) },
+    // 身体角度交给 posture 层（脊柱链），视线只管眼珠与头
+    options: { enabled: state.settings.gaze !== false, strength: Number(state.settings.strength ?? 1), body: 0, bodyRoll: 0 },
+  })
+
+  // 姿态链：头 → 胸 → 腰 逐级跟随（弹簧 + 过冲），并且喂给物理权重最高的输入
+  state.posture = createPosture({
+    param: stage.param,
+    gaze: state.gaze,
+    options: { strength: Number(state.settings.strength ?? 1) },
   })
 
   // 抚摸晃动：蹭头时额外叠一层摆动（gaze 先定方向，这层再叠幅度）
@@ -153,6 +159,10 @@ async function bootStage() {
   })
 
   // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘
+  // 伪面捕驱动：把「我们的姿态」翻译成模型的**面捕捉取通道**
+  // （AngleX/Y/Z、PositionX/Y、ParamBreath、JawOpen…），物理链才会整条活起来
+  state.capture = createCapture({ param: stage.param })
+
   // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘 + 身体前倾放大
   state.facePinch = createFacePinch({
     param: stage.param,
@@ -168,18 +178,69 @@ async function bootStage() {
   state.mouth = createMouth({ param: stage.param })
 
   let lastT = performance.now()
-  stage.onBeforeUpdate(() => {
+  let frameDt = 1000 / 60
+  const motionState = { x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0 }
+  const tickDt = () => {
     const now = performance.now()
-    const dt = Math.min(120, Math.max(1, now - lastT))
+    frameDt = Math.min(120, Math.max(1, now - lastT))
     lastT = now
+  }
+
+  /**
+   * 窗口/角色的位移加速度 → 惯性冲击。
+   * 拖动窗口时（左键搬窗、中键搬运都由主进程 setPosition 驱动），角色的头发、耳环、
+   * 裙摆会「被甩」——这才是拖动时最出效果的那一下。窗口坐标变化由 screenX/Y 读到。
+   */
+  const updateMotion = (dtMs) => {
+    // 用「角色在屏幕上的位置」做微分：窗口被搬 + 角色在窗口内被挪，两条路都能触发惯性。
+    // 只取窗口坐标的话，面板开着中键挪角色时物理完全不动（角色在窗口里移动，窗口没动）。
+    const x = window.screenX + (state.stage?.model?.position?.x || 0)
+    const y = window.screenY + (state.stage?.model?.position?.y || 0)
+    if (motionState.x == null) { motionState.x = x; motionState.y = y; return }
+    const dt = Math.max(0.008, dtMs / 1000)
+    const vx = (x - motionState.x) / dt
+    const vy = (y - motionState.y) / dt
+    const ax = (vx - motionState.vx) / dt
+    const ay = (vy - motionState.vy) / dt
+    motionState.x = x
+    motionState.y = y
+    motionState.vx = vx
+    motionState.vy = vy
+    // 平滑一层：窗口坐标是整数，直接微分会有尖刺
+    motionState.ax = motionState.ax * 0.6 + ax * 0.4
+    motionState.ay = motionState.ay * 0.6 + ay * 0.4
+    state.life?.motion(motionState.ax, motionState.ay)
+    state.capture?.motion(motionState.vx, motionState.vy)
+  }
+
+  // ① 物理之前：喂物理输入 + 摆姿势。
+  // 物理的输入就是「头部角度 / 呼吸 / 前倾」（physics3 实测 19 处引用），
+  // 而我们原来在物理**之后**才写这些角度 —— 等于让物理永远在算静止的模型，
+  // 头发、耳朵、耳环的物理全部僵死，这就是「没有物理效果」的真正原因。
+  stage.onBeforePhysics(() => {
+    tickDt()
+    updateMotion(frameDt)
+    state.layers.applyPhysics()
+    state.facePinch?.applyPhysics()
     perf.time('pre', () => {
-      state.gaze.apply(dt)
+      state.gaze?.apply(frameDt)
+      state.petSway?.apply(frameDt)
+      state.facePinch?.applyPosture(frameDt)
+      // 脊柱链：胸/腰跟随（喂给物理权重最高的 ParamBodyAngleX/Z）
+      state.posture?.apply(frameDt)
+      // 姿态摆好之后，翻译成面捕捉取通道（物理要吃的就是这些）
+      state.capture?.apply(frameDt)
+    })
+  })
+
+  // ② 物理之后：表情 / 嘴 / 活气 / 鼓脸。
+  // 活气层要「读回物理刚算出的值再加偏移」，所以必须晚于物理。
+  stage.onBeforeUpdate(() => {
+    perf.time('post', () => {
       state.layers.apply()
-      state.petSway.apply(dt)
-      // 顺序：表情层之后加嘴与活气，最后捏脸（捏脸要压过嘴的待机微动）
-      state.mouth.apply(dt)
-      state.life.apply(dt)
-      state.facePinch?.apply(dt)
+      state.mouth?.apply(frameDt)
+      state.life?.apply(frameDt)
+      state.facePinch?.apply(frameDt)
     })
   })
 
@@ -224,9 +285,8 @@ async function bootStage() {
       }
       return { w: Math.round(maxX - minX), h: Math.round(maxY - minY), y: Math.round((minY + maxY) / 2) }
     },
-    /**
-     * 物理输出参数在 onBeforeUpdate（物理之后）还有没有值？
-     * 有值 → 可以「叠加」；读到 0 → 只能整层接管。
+    /** 物理输出参数在 onBeforeUpdate（物理之后）还有没有值？
+     *  有值 → 可以「叠加」；读到 0 → 只能整层接管。
      */
     physicsSample(ids = ['LEar1', 'LEar2', 'LEar3', 'FrontHairY1', 'SideHairY1', 'LateHairY1'], frames = 90) {
       return new Promise((resolve) => {
@@ -254,6 +314,61 @@ async function bootStage() {
         })
       })
     },
+    /** 物理「算之前」这一瞬看到的参数值 —— 判断物理到底吃到了什么 */
+    preSample(ids = ['ParamAngleZ', 'ParamAngleY', 'ParamAngleX', 'ParamBreath', 'LeanInput', 'LEar1', 'FrontHairY1'], frames = 60) {
+      return new Promise((resolve) => {
+        const acc = {}
+        for (const id of ids) acc[id] = { min: Infinity, max: -Infinity, n: 0 }
+        let left = frames
+        const off = state.stage.onBeforePhysics(() => {
+          for (const id of ids) {
+            const v = state.stage.param.get(id)
+            if (v == null) continue
+            const a = acc[id]
+            if (v < a.min) a.min = v
+            if (v > a.max) a.max = v
+            a.n += 1
+          }
+          if (--left <= 0) {
+            off()
+            for (const id of ids) {
+              acc[id].min = Math.round(acc[id].min * 10) / 10
+              acc[id].max = Math.round(acc[id].max * 10) / 10
+            }
+            resolve(acc)
+          }
+        })
+      })
+    },
+    phys: () => state.stage.physicsInfo(),
+    cap: () => state.capture?.state() ?? null,
+    posture: () => state.posture?.state() ?? null,
+    motion: () => ({
+      vx: Math.round(motionState.vx), vy: Math.round(motionState.vy),
+      ax: Math.round(motionState.ax), ay: Math.round(motionState.ay),
+      life: state.life?.state?.().ext ?? null,
+    }),
+    /** 用 shell.moveBy 摇窗口，模拟拖动带来的加速度（CDP 移动不了真实窗口） */
+    shakeWindow(px = 36, steps = 24, interval = 40) {
+      let i = 0
+      const id = setInterval(() => {
+        shell.moveBy(i % 2 ? px : -px, 0)
+        if (++i >= steps) clearInterval(id)
+      }, interval)
+    },
+    /** 关掉桌面光标反馈，让探针的合成鼠标事件不被真实光标覆盖 */
+    desktopGaze(on) { window.__noDesktopGaze = !on },
+    /** 在物理之前强行钉住某些参数（测物理响应用） */
+    holdPre(list) {
+      state._holdPreOff?.()
+      state._holdPreOff = state.stage.onBeforePhysics(() => {
+        for (const [id, v] of list) state.stage.param.set(id, v)
+      })
+    },
+    holdPreOff() { state._holdPreOff?.(); state._holdPreOff = null },
+    /** 关掉自制活气层，用来单独观察模型自带物理 */
+    lifeOff() { state.life.set({ windAmp: 0, windAmpX: 0, earTremor: 0, earAmp: 0, jewelAmp: 0, inertiaX: 0, inertiaY: 0, earMin: 9999, earMax: 9999 }) },
+    lifeOn() { state.life.set({ windAmp: 0.035, windAmpX: 0.02, earTremor: 0.012, earAmp: 1, jewelAmp: 0.3, inertiaX: 0.85, inertiaY: 1, earMin: 5.5, earMax: 13 }) },
   }
 
   const viewport = createViewport({ model: stage.model, app: stage.app })
@@ -291,7 +406,7 @@ async function bootStage() {
     }
   })
   // 桌面级跟随：主进程持续读全局光标位置，窗口外也能看过去
-  shell.onCursor?.((p) => lookFromClient(p.x, p.y))
+  shell.onCursor?.((p) => { if (!window.__noDesktopGaze) lookFromClient(p.x, p.y) })
 }
 
 /** 捏脸时的表情反馈：＞＜ + 脸红（独立 source，松手整组撤掉，不干扰分区反应） */
@@ -1034,6 +1149,7 @@ function bindPanel() {
   $('#strength').oninput = (e) => {
     const strength = Number(e.target.value)
     state.gaze.set({ strength })
+    state.posture?.set({ strength })
     shell.set({ strength })
   }
   const petGain = (v) => {
