@@ -10,7 +10,8 @@
     "core": "node scripts/fetch-core.mjs",
     "shot": "node scripts/shot.mjs",
     "app": "electron app/main.mjs",
-    "pack": "node scripts/pack.mjs"
+    "pack": "node scripts/pack.mjs",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/shortcut.ps1"
   },
   "engines": {
     "node": ">=20"
