@@ -268,6 +268,33 @@ export async function createStage(o = {}) {
     }
   }
 
+  /**
+   * 采样一个矩形区域里的最大 alpha（「角色附近」判定用）。
+   * 一次渲染 + 一次 readPixels；只在按下这种低频时机调用。
+   */
+  const sampleAlphaRegion = (x, y, w, h) => {
+    try {
+      app.renderer.render(app.stage)
+      const gl = app.renderer.gl
+      const res = app.renderer.resolution || 1
+      const px = Math.round(x * res)
+      const py = Math.round(app.renderer.height - (y + h) * res)
+      const pw = Math.max(1, Math.round(w * res))
+      const ph = Math.max(1, Math.round(h * res))
+      const cx = Math.max(0, Math.min(px, app.renderer.width - 1))
+      const cy = Math.max(0, Math.min(py, app.renderer.height - 1))
+      const cw = Math.max(1, Math.min(pw, app.renderer.width - cx))
+      const ch = Math.max(1, Math.min(ph, app.renderer.height - cy))
+      const buf = new Uint8Array(cw * ch * 4)
+      gl.readPixels(cx, cy, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, buf)
+      let maxAlpha = 0
+      for (let i = 3; i < buf.length; i += 4) if (buf[i] > maxAlpha) maxAlpha = buf[i]
+      return { maxAlpha }
+    } catch (e) {
+      return { maxAlpha: null, error: String((e && e.message) || e) }
+    }
+  }
+
   const resize = (w, h) => {
     const W = Math.max(1, Math.round(w))
     const H = Math.max(1, Math.round(h))
@@ -288,7 +315,7 @@ export async function createStage(o = {}) {
     /** 在 physics.evaluate 之前一刻调用（物理输入参数必须在这里写） */
     onBeforePhysics(fn) { beforePhysicsHooks.add(fn); return () => beforePhysicsHooks.delete(fn) },
     motion, stopMotions, setExpression,
-    modelSize, size, resize, toModel, hitTest, sampleAlpha,
+    modelSize, size, resize, toModel, hitTest, sampleAlpha, sampleAlphaRegion,
     focus: (x, y, instant) => model.focus(x, y, instant),
     destroy() {
       beforeHooks.clear()

@@ -122,6 +122,7 @@ async function bootStage() {
     applyDeepLink()
 
     window.__stage = state
+    window.__reaction = applyReaction
     window.__ready = true
     document.title = `ready ${state.caps.model.name}`
   } catch (e) {
@@ -274,6 +275,13 @@ function bootRegions() {
       const { alpha } = state.stage.sampleAlpha(sp.x, sp.y)
       if (alpha == null) return true
       return alpha > 12
+    },
+    // 起手范围 = 应用窗口边界（最终形态是贴住角色的无边框透明窗口）。
+    // 窗口外的事件根本进不来，所以这道判定在成品里天然成立；这里按舞台尺寸兜底。
+    isNear: (sp) => {
+      const s = state.stage.size()
+      const m = 8
+      return sp.x >= -m && sp.y >= -m && sp.x <= s.width + m && sp.y <= s.height + m
     },
     onEvent: onRegionEvent,
   })

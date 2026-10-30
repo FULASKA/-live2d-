@@ -290,7 +290,7 @@ export function seedRegions({ core, internalModel, displayNames, canvas }) {
  * 手势识别：按下 → 移动 → 抬起，判定点按 / 抚摸 / 拖动。
  * 阈值用**模型画布像素**，与缩放无关。
  */
-export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }) {
+export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque, isNear }) {
   // 阈值按**画布宽度比例**给，与窗口缩放、模型分辨率都无关。
   // 一开始按「画布像素绝对值」定过，结果屏幕上动 8px 就被当成拖动 —— 太容易误判。
   const { width: canvasW = 1 } = viewport.modelSize?.() || {}
@@ -305,6 +305,12 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
   let hovered = null
 
   const modelPoint = (clientX, clientY) => viewport.clientToModel(clientX, clientY)
+
+  /** 指针的舞台内坐标（给「离角色多远」这类屏幕空间判定用） */
+  const stagePoint = (clientX, clientY) => {
+    const r = canvas?.getBoundingClientRect?.() || { left: 0, top: 0 }
+    return { x: clientX - r.left, y: clientY - r.top }
+  }
 
   /**
    * 命中判定：几何命中之后还要过「不透明像素」这一关。
@@ -347,7 +353,7 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
       //      应该算腰/腿的）；反过来在头/胸里滑动不会被低层热区抢走。
       const target = pressed.region
       const canAdopt = !target || (pressed.entered && region && region.z > target.z)
-      if (region && canAdopt && region !== target) {
+      if (region && canAdopt && region !== target && pressed.nearBody) {
         const visible = target ? true : (!isOpaque || isOpaque(p))
         if (visible) {
           pressed.region = region
@@ -384,7 +390,12 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
 
   const onPointerDown = (e) => {
     const { p, region } = hitAt(e.clientX, e.clientY, { gate: true })
-    pressed = { region, regionId: region?.id, start: p, last: p, moved: 0, stepDist: 0, entered: false, t0: performance.now(), petSteps: 0, dragging: false, pointerId: e.pointerId }
+    // 起手在热区外时，先看「离角色够不够近」：远处横拖是搬窗口，不该算抚摸
+    let nearBody = true
+    if (!region && isNear) {
+      try { nearBody = isNear(stagePoint(e.clientX, e.clientY)) !== false } catch { nearBody = true }
+    }
+    pressed = { region, regionId: region?.id, start: p, last: p, moved: 0, stepDist: 0, entered: false, nearBody, t0: performance.now(), petSteps: 0, dragging: false, pointerId: e.pointerId }
     // 合成事件（测试/无头）里 pointerId 不是活跃指针，capture 会抛 —— 拦掉，别让后续逻辑断链
     try { canvas?.setPointerCapture?.(e.pointerId) } catch {}
     emit('down', { region, point: p })
