@@ -178,6 +178,15 @@ const server = createServer(async (req, res) => {
       return json(res, 404, { error: 'not found', rel })
     }
 
+    // --- 依赖（pixi8 / 引擎）：开发期直接挂 node_modules，正式版由打包器处理 ---
+    if (p.startsWith('/vendor8/')) {
+      const rel = p.slice('/vendor8/'.length)
+      const abs = path.join(ROOT, 'node_modules', rel)
+      if (!abs.startsWith(path.join(ROOT, 'node_modules'))) return json(res, 403, { error: 'forbidden' })
+      if (await serveFile(res, abs)) return
+      return json(res, 404, { error: 'not found', rel })
+    }
+
     // --- 静态（harness / vendor / docs） ---
     if (p === '/' || p === '') { res.writeHead(302, { location: '/harness/' }); return res.end() }
     if (p === '/harness') { res.writeHead(302, { location: '/harness/' }); return res.end() }

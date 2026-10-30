@@ -1,342 +1,163 @@
-// 验证台：证明「能力枚举 / 动作下发 / 参数内省 / 视线跟随」四条通路可用。
-// 只依赖 PROTOCOL.md 的接口，不含产品 UI。
+// 验证台：证明「能力枚举 / 双路动作 / 参数叠加 / 视线跟随 / 命中反查」几条通路可用。
+// 只依赖 PROTOCOL.md 的接口 + src/stage 的内核适配层，不含产品 UI。
+//
+// 内核已换：pixi.js 8 + untitled-pixi-live2d-engine（Cubism 5）。
+// 旧页（pixi6 + pixi-live2d-display）已删除 —— 它不认乘法色，鼻子是黑块、瞳孔丢色。
 
-const CDN = {
-  core: 'https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js',
-  pixi: 'https://unpkg.com/pixi.js@6.5.10/dist/browser/pixi.min.js',
-  live2d: 'https://unpkg.com/pixi-live2d-display@0.4.0/dist/cubism4.min.js',
-}
+import { createStage, MotionPriority } from '../src/stage/engine.js'
+import { createLayerStack } from '../src/stage/layers.js'
+import { createViewport } from '../src/stage/viewport.js'
+
 const $ = (s) => document.querySelector(s)
 const TOKEN = new URLSearchParams(location.search).get('token') || 'dev-token'
 
 const state = {
-  caps: null, model: null, app: null,
-  held: new Map(),        // 受控参数（模拟 L5 覆盖层）
-  exprs: [],              // L2 表情层：可叠多层，后应用者覆盖同参数
+  caps: null, stage: null, layers: null, viewport: null,
   gaze: true, intensity: 0.6,
   log: [],
+  frames: 0,
   stateMap: {
     thinking: { expression: '圈圈眼' }, working: { expression: '加载' },
     waiting: { expression: '流冷汗' }, success: { expression: '爱心眼' }, error: { expression: '流泪' },
   },
 }
 
-function loadScript(src) {
-  return new Promise((res, rej) => {
-    const s = document.createElement('script')
-    s.src = src; s.onload = res; s.onerror = () => rej(new Error('加载失败: ' + src))
-    document.head.appendChild(s)
-  })
-}
-
 function pushLog(kind, text) {
   state.log.unshift({ kind, text, t: new Date().toLocaleTimeString() })
   state.log.length = Math.min(state.log.length, 80)
-  renderLog()
-}
-function renderLog() {
-  $('#log').innerHTML = state.log.map((e) => `<div class="ev"><b>${e.kind}</b> ${e.text} <span style="float:right">${e.t}</span></div>`).join('')
+  $('#log').innerHTML = state.log
+    .map((e) => `<div class="ev"><b>${e.kind}</b> ${e.text} <span style="float:right">${e.t}</span></div>`)
+    .join('')
 }
 
+// ---------- 启动 ----------
 async function boot() {
   try {
-    const caps = await fetch('/api/capabilities').then((r) => r.json())
-    state.caps = caps
+    state.caps = await fetch('/api/capabilities').then((r) => r.json())
     renderMeta()
     renderLists()
   } catch (e) {
     $('#meta').innerHTML = `<div class="warn">拿不到能力清单：${e.message}</div>`
-  }
-
-  try {
-    await loadScript('/vendor/live2dcubismcore.min.js').catch(() => loadScript(CDN.core))
-    pushLog('core', 'Cubism Core 就绪')
-  } catch (e) {
-    $('#meta').innerHTML = '<div class="warn">缺 Cubism Core。<br>跑 <code>node scripts/fetch-core.mjs</code>，或联网后刷新（会走官方 CDN）。</div>'
     return
   }
-  await loadScript(CDN.pixi)
-  await loadScript(CDN.live2d)
   await bootStage()
 }
 
 async function bootStage() {
-  const PIXI = window.PIXI
-  const stageEl = $('#stage')
-  const q0 = new URLSearchParams(location.search)
-  const app = new PIXI.Application({
-    view: $('#cv'), backgroundAlpha: q0.get('bg') ? 1 : 0, antialias: true,
-    autoDensity: true, resolution: window.devicePixelRatio || 1, resizeTo: stageEl,
-  })
-  if (q0.get('bg')) app.renderer.backgroundColor = parseInt(q0.get('bg').replace('#', ''), 16)
-  state.app = app
-
   try {
-    const model = await PIXI.live2d.Live2DModel.from(state.caps.model.url)
-    state.model = model
-    model.anchor.set(0.5, 0.5)
-    app.stage.addChild(model)
-    layout()
-    window.addEventListener('resize', layout)
-    requestAnimationFrame(layout)
-    app.renderer.on?.('resize', layout)
-    pushLog('model', `已加载 ${state.caps.model.name}`)
-    introspect()
-    if (model.internalModel.on) {
-      // 事件名先探一遍：不同版本的 pixi-live2d-display 钩子位置不一样
-      state.evCounts = {}
-      for (const ev of ['beforeModelUpdate', 'beforeMotionUpdate', 'afterMotionUpdate', 'afterModelUpdate']) {
-        model.internalModel.on(ev, () => { state.evCounts[ev] = (state.evCounts[ev] || 0) + 1 })
+    const stage = await createStage({
+      container: $('#stage'),
+      modelUrl: state.caps.model.url,
+      verbose: new URLSearchParams(location.search).has('verbose'),
+    })
+    state.stage = stage
+    state.layers = createLayerStack({ param: stage.param, part: stage.part })
+    stage.onBeforeUpdate(() => state.layers.apply())
+    // 帧内取样：写在 coreModel.update() 之前一刻，这是唯一能读到「真正送进绘制」的值的位置
+    stage.onBeforeUpdate(() => {
+      window.__frameParams = {
+        key1: stage.param.get('key1'), key2: stage.param.get('key2'), key7: stage.param.get('key7'),
+        headZ: stage.param.get('ParamAngleZ'),
+        eyeX: stage.param.get('ParamEyeBallX'), eyeY: stage.param.get('ParamEyeBallY'),
       }
-    }
-    // 真正的叠层点：coreModel.update() 之前一瞬（这里的写入不会被后续步骤还原）
-    const cm = model.internalModel.coreModel
-    const origUpdate = cm.update.bind(cm)
-    cm.update = () => { applyLayers(); origUpdate() }
-    hookPointer()
-    applyDeepLink()
-    app.ticker.add(() => { state.frames = (state.frames || 0) + 1; $('#fps').textContent = `FPS ${app.ticker.FPS.toFixed(0)}` })
-  } catch (e) {
-    pushLog('error', '模型加载失败: ' + e.message)
-    $('#meta').innerHTML = `<div class="warn">模型加载失败：${e.message}</div>`
-  }
+    })
 
+    const viewport = createViewport({ model: stage.model, app: stage.app })
+    state.viewport = viewport
+    viewport.observe($('#stage'))
+
+    stage.app.ticker.add(() => {
+      state.frames = stage.clocks().frames
+      $('#fps').textContent = `FPS ${stage.ticker.FPS.toFixed(0)}`
+    })
+
+    pushLog('model', `已加载 ${state.caps.model.name}（Cubism 5 内核）`)
+    introspect()
+    hookPointer()
+    bindControls()
+    applyDeepLink()
+
+    // 自动化入口（无头验证脚本用）：等这个标记再截图/取样
+    window.__stage = state
+    window.__ready = true
+    document.title = `ready ${state.caps.model.name}`
+  } catch (e) {
+    pushLog('error', `模型加载失败：${e.message}`)
+    $('#meta').innerHTML = `<div class="warn">模型加载失败：${e.message}</div>`
+    window.__error = e.message
+  }
+}
+
+function bindControls() {
   $('#gaze').onchange = (e) => { state.gaze = e.target.checked }
   $('#gaze-int').oninput = (e) => { state.intensity = Number(e.target.value) }
-  $('#checker').onchange = (e) => stageEl.classList.toggle('checker', e.target.checked)
+  $('#checker').onchange = (e) => $('#stage').classList.toggle('checker', e.target.checked)
   $('#send-state').onclick = () => sendState($('#state-sel').value)
 }
 
-/** 点是否落在三角形内（同向法） */
-function pointInTri(px, py, ax, ay, bx, by, cx, cy) {
-  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
-  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
-  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
-  const neg = d1 < 0 || d2 < 0 || d3 < 0
-  const pos = d1 > 0 || d2 > 0 || d3 > 0
-  return !(neg && pos)
-}
-
-/** 可复现的视觉验证钩子：?expr=圈圈眼&motion=2&param=ParamAngleX:20&checker=0 */
-function applyDeepLink() {
-  const q = new URLSearchParams(location.search)
-  const { model } = state
-  if (q.get('expr')) {
-    for (const n of q.get('expr').split(',')) addExpression(n.trim())
-    pushLog('deep', `表情 ${q.get('expr')}`)
-    setTimeout(() => {
-      const cm = state.model?.internalModel.coreModel
-      if (!cm) return
-      const probe = ['key1', 'key3', 'key4', 'key5', 'key6', 'key7']
-        .map((id) => `${id}=${Number(cm.getParameterValueById(id) ?? NaN).toFixed(2)}`)
-      pushLog('check', `expr 生效: ${probe.join(' ')}`)
-      if (!q.get('steps')) document.title = `DBG frames=${state.frames || 0} layers=${state.layerCount || 0} expr=${state.exprs.map((x) => x.name).join('+') || '-'} ${probe.join(' ')}`
-    }, 1200)
-  }
-  if (q.get('motion')) {
-    const i = Number(q.get('motion'))
-    const m = state.caps.motions.filter((x) => x.group === 'Action')[i]
-    if (m) { playMotion(m, 0) }
-  }
-  if (q.get('param')) {
-    for (const kv of q.get('param').split(',')) {
-      const [id, v] = kv.split(':')
-      if (id && v != null) { state.held.set(id, Number(v)); }
-    }
-    applyHeld(); renderHeld()
-  }
-  // 命中反查：?hit=x,y —— 从屏幕坐标反查是哪个网格盖住了这个点
-  if (q.get('hit')) {
-    const [sx, sy] = q.get('hit').split(',').map(Number)
-    const p = model.toLocal(new window.PIXI.Point(sx, sy))
-    const cm2 = model.internalModel.coreModel
-    const n = cm2.getDrawableCount ? cm2.getDrawableCount() : 0
-    const order = cm2.getDrawableRenderOrders ? cm2.getDrawableRenderOrders() : []
-    const hits = []
-    for (let i = 0; i < n; i++) {
-      const idx = cm2.getDrawableVertexIndices(i)
-      const vtx = model.internalModel.getDrawableVertices(i)
-      if (!idx || !vtx) continue
-      for (let t = 0; t < idx.length; t += 3) {
-        const a = idx[t] * 2, b = idx[t + 1] * 2, c = idx[t + 2] * 2
-        if (pointInTri(p.x, p.y, vtx[a], vtx[a + 1], vtx[b], vtx[b + 1], vtx[c], vtx[c + 1])) {
-          hits.push({ i, id: cm2.getDrawableIds?.()[i], order: order[i], tex: cm2.getDrawableTextureIndices(i), opacity: cm2.getDrawableOpacity(i), mask: cm2.getDrawableMaskCounts()[i], blend: cm2.getDrawableBlendMode(i) })
-          break
-        }
-      }
-    }
-    hits.sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
-    pushLog('hit', `(${sx},${sy}) model=(${p.x.toFixed(0)},${p.y.toFixed(0)}) 命中 ${hits.length} 个`)
-    for (const h of hits.slice(-4)) pushLog('hit', `#${h.i} ${h.id} tex=${h.tex} op=${h.opacity.toFixed(2)} mask=${h.mask} blend=${h.blend} order=${h.order}`)
-    state.hits = hits.slice(-4)
-    document.title = `HIT ${hits.length} ${hits.slice(-2).map((h) => h.id).join(' ')}`
-  }
-
-  // 部件实验：?hidepart=Part10,Part46 / ?showpart=Part43:1
-  state.partOverride = new Map()
-  for (const id of (q.get('hidepart') || '').split(',').filter(Boolean)) state.partOverride.set(id, 0)
-  for (const kv of (q.get('showpart') || '').split(',').filter(Boolean)) {
-    const [id, v] = kv.split(':')
-    state.partOverride.set(id, Number(v ?? 1))
-  }
-  if (state.partOverride.size) pushLog('probe', `部件覆盖 ${[...state.partOverride].map(([k, v]) => `${k}=${v}`).join(' ')}`)
-
-  // 遮罩实验：?nomask=1 把所有网格的遮罩上下文置空，看画面怎么变
-  if (q.get('nomask')) {
-    const r = model.internalModel.renderer
-    const mgr = r && r._clippingManager
-    if (mgr && Array.isArray(mgr._clippingContextListForDraw)) {
-      mgr._clippingContextListForDraw = new Array(mgr._clippingContextListForDraw.length).fill(null)
-      pushLog('probe', '遮罩上下文已清空')
-    } else {
-      pushLog('probe', '找不到 clippingManager：' + (mgr ? '结构不同' : '未初始化'))
-    }
-  }
-
-  // 确定性步进：无头浏览器只渲一帧，用这个手动推进 N 帧再取样（也可当 CI 钩子）
-  if (q.get('steps')) {
-    const n = Math.max(1, Number(q.get('steps')) || 60)
-    for (let i = 0; i < n; i++) { model.internalModel.update(1 / 60); state.frames = (state.frames || 0) + 1 }
-    state.app.renderer.render(state.app.stage)
-    const cm = model.internalModel.coreModel
-    const idx = cm.getParameterIndex?.('key3')
-    const rng = idx != null && idx >= 0 ? [cm.getParameterMinimumValue?.(idx), cm.getParameterMaximumValue?.(idx), cm.getParameterDefaultValue?.(idx)] : 'no-idx'
-    state.dbg = { ...(state.dbg || {}), idx, rng, value: cm.getParameterValueById('key3'), layer: state.dbgLayer }
-    const probe = ['key1', 'key3', 'key4', 'key5', 'key6', 'key7']
-      .map((id) => `${id}=${Number(cm.getParameterValueById(id) ?? NaN).toFixed(2)}`)
-    const before = cm.getParameterValueById('key3')
-    cm.setParameterValueById('key3', 0.77)
-    const afterSet = cm.getParameterValueById('key3')
-    model.internalModel.update(1 / 60)
-    const afterUpdate = cm.getParameterValueById('key3')
-    pushLog('check', `持久性 before=${before} set=${afterSet} afterUpdate=${afterUpdate}`)
-    document.title = `DBG steps=${n} persist=${before}/${afterSet}/${afterUpdate} dbg=${JSON.stringify(state.dbg || {})} ${probe.join(' ')}`
-  }
-}
-
-function layout() {
-  const { model, app } = state
-  if (!model) return
-  const el = $('#stage')
-  // 先对齐渲染器尺寸：resizeTo 的回调可能晚于首次 layout
-  const w = el.clientWidth || app.renderer.screen.width
-  const h = el.clientHeight || app.renderer.screen.height
-  if (w && h && (app.renderer.screen.width !== w || app.renderer.screen.height !== h)) {
-    app.renderer.resize(w, h)
-  }
-  const sw = app.renderer.screen.width || w, sh = app.renderer.screen.height || h
-  const mw = model.internalModel.originalWidth || model.width || 1
-  const mh = model.internalModel.originalHeight || model.height || 1
-  const s = Math.min(sw / mw, sh / mh) * 0.95
-  model.scale.set(s)
-  model.position.set(sw / 2, sh / 2)
-}
-
+// ---------- 视线跟随（L1，可叠加，不抢占任何层） ----------
 function hookPointer() {
   window.addEventListener('pointermove', (e) => {
-    const { model, app } = state
-    if (!model || !state.gaze) return
-    const r = $('#cv').getBoundingClientRect()
-    const sw = app.renderer.screen.width, sh = app.renderer.screen.height
+    const { stage } = state
+    if (!stage || !state.gaze) return
+    const r = stage.canvas.getBoundingClientRect()
+    const sw = stage.app.screen.width, sh = stage.app.screen.height
     const tx = ((e.clientX - r.left) / r.width) * sw
     const ty = ((e.clientY - r.top) / r.height) * sh
-    // 强度 = 目标点向中心收缩的比例（后续由 gaze.intensity 参数化在 core 里）
+    // 强度 = 目标点向画面中心收缩的比例：0 = 完全不跟，1 = 跟满
     const k = state.intensity
-    model.focus(sw / 2 + (tx - sw / 2) * k, sh / 2 + (ty - sh / 2) * k)
+    stage.focus(sw / 2 + (tx - sw / 2) * k, sh / 2 + (ty - sh / 2) * k)
   })
 }
 
-/** 运行时内省：参数真实范围只在这里拿得到 */
+// ---------- 运行时内省 ----------
 function introspect() {
-  const { model, caps } = state
-  const cm = model.internalModel.coreModel
-  const ids = cm._parameterIds || []
-  const min = cm._parameterMinimumValues, max = cm._parameterMaximumValues, def = cm._parameterDefaultValues
+  const { stage, caps } = state
   const byId = new Map(caps.params.map((p) => [p.id, p]))
-  state.runtimeParams = ids.map((id, i) => ({
-    id,
-    name: byId.get(id)?.name || id,
-    group: byId.get(id)?.group || null,
-    min: min ? min[i] : null, max: max ? max[i] : null, default: def ? def[i] : null,
-    value: cm.getParameterValueById ? cm.getParameterValueById(id) : null,
-  }))
-  if (state.runtimeParams.length) {
-    pushLog('inspect', `运行时参数 ${state.runtimeParams.length} 个（最小/最大/默认值已取到）`)
-    renderParams()
-  } else {
-    pushLog('warn', '未取到运行时参数列表，参数面板退化为静态清单')
-  }
-  // 动作/表情是否真的注册上了
-  const mm = model.internalModel.motionManager
-  const groups = mm?.definitions ? Object.keys(mm.definitions) : []
-  if (groups.length) pushLog('inspect', `动作组: ${groups.join(', ')}`)
-  // 贴图与网格：黑块/空眼多半出在这两处
-  const tex = model.textures || model.internalModel.textures || []
-  const drawIds = cm._drawableIds || []
-  pushLog('inspect', `贴图 ${tex.length} 张${tex[0]?.width ? ` / ${tex.map((t) => `${t.width}x${t.height}`).join(' ')}` : ''} · 网格 ${drawIds.length} 个`)
-  state.inspect = { tex: tex.length, drawables: drawIds.length }
-  try {
-    const mc = cm.getDrawableMaskCounts ? Array.from(cm.getDrawableMaskCounts()) : []
-    const masked = mc.filter((n) => n > 0).length
-    const inverted = drawIds.filter((_, i) => cm.getDrawableInvertedMaskBit?.(i)).length
-    const blended = drawIds.filter((_, i) => (cm.getDrawableBlendMode?.(i) ?? 0) !== 0).length
-    pushLog('inspect', `遮罩网格 ${masked}/${drawIds.length}（反相 ${inverted}）· 非普通混合 ${blended}`)
-    state.inspect.masked = masked
+  state.runtimeParams = stage.param.ids.map((id) => {
+    const info = stage.param.info(id)
+    return { id, name: byId.get(id)?.name || id, group: byId.get(id)?.group || null, ...info }
+  })
+  pushLog('inspect', `运行时参数 ${stage.param.count} 个 / 部件 ${stage.part.count} 个`)
 
-    // 贴图索引越界 = 无贴图网格 = 纯色方块（不同内核会渲染成黑或白）
-    const texIdx = drawIds.map((_, i) => { try { return cm.getDrawableTextureIndices(i) } catch { return -1 } })
-    const maxTex = Math.max(...texIdx)
-    const oob = texIdx.filter((t) => t >= tex.length).length
-    const dist = {}
-    for (const t of texIdx) dist[t] = (dist[t] || 0) + 1
-    pushLog('inspect', `贴图索引 max=${maxTex} 越界网格=${oob} 分布=${JSON.stringify(dist)} 已加载=${tex.length}`)
-    state.inspect.maxTex = maxTex; state.inspect.oob = oob
-    const oobIds = drawIds.filter((_, i) => texIdx[i] >= tex.length)
-    if (oobIds.length) pushLog('inspect', '越界网格: ' + oobIds.slice(0, 12).join(' '))
+  const model = stage.model
+  const tex = model.textures || []
+  pushLog('inspect', `贴图 ${tex.length} 张${tex[0]?.source?.pixelWidth ? ` / ${tex.map((t) => `${t.source.pixelWidth}x${t.source.pixelHeight}`).join(' ')}` : ''}`)
 
-    // UV 退化检查：整块网格只采样一个像素 → 纯色方块
-    const degenerate = []
-    for (let i = 0; i < drawIds.length; i++) {
+  const core = stage.core
+  const n = core.getDrawableCount()
+  const ids = []
+  for (let i = 0; i < n; i++) ids.push(String(core.getDrawableId(i).getString().s))
+  const masked = core.getDrawableMaskCounts ? Array.from(core.getDrawableMaskCounts()).filter((x) => x > 0).length : 0
+  pushLog('inspect', `网格 ${n} 个 · 带遮罩 ${masked}`)
+
+  // 换核后必须复核的一件事：乘法色真的生效了（鼻子阴影不再变块）
+  if (core.getMultiplyColor) {
+    let nonWhite = 0
+    const samples = []
+    for (let i = 0; i < n; i++) {
       try {
-        const uv = cm.getDrawableVertexUvs(i)
-        if (!uv || uv.length < 4) continue
-        let uMin = 9, uMax = -9, vMin = 9, vMax = -9
-        for (let k = 0; k < uv.length; k += 2) {
-          uMin = Math.min(uMin, uv[k]); uMax = Math.max(uMax, uv[k])
-          vMin = Math.min(vMin, uv[k + 1]); vMax = Math.max(vMax, uv[k + 1])
+        const c = core.getMultiplyColor(i)
+        if (!c) continue
+        if (c.r < 0.99 || c.g < 0.99 || c.b < 0.99) {
+          nonWhite++
+          if (samples.length < 6) samples.push(`${ids[i]}(${c.r.toFixed(2)},${c.g.toFixed(2)},${c.b.toFixed(2)})`)
         }
-        const spread = Math.max(uMax - uMin, vMax - vMin)
-        const op = cm.getDrawableOpacity(i)
-        if (spread < 1e-4 && op > 0.01) degenerate.push(`${drawIds[i]}(op=${op.toFixed(2)},uv=${uMin.toFixed(4)},${vMin.toFixed(4)})`)
       } catch {}
     }
-    pushLog('inspect', `UV 退化网格 ${degenerate.length}${degenerate.length ? ': ' + degenerate.slice(0, 8).join(' ') : ''}`)
-    state.inspect.degenerate = degenerate.length
+    pushLog('inspect', `非白乘法色网格 ${nonWhite}/${n}${samples.length ? ': ' + samples.join(' ') : ''}`)
+  } else {
+    pushLog('warn', '内核仍未暴露乘法色表面 API')
+  }
 
-    // 乘法色 / 滤色（Cubism 4.2+）：渲染器不认的话，阴影变黑块、瞳孔变白圈
-    if (cm.getDrawableMultiplyColor) {
-      let nonWhite = 0
-      const samples = []
-      for (let i = 0; i < drawIds.length; i++) {
-        try {
-          const m = cm.getDrawableMultiplyColor(i)
-          if (!m) continue
-          const [r, g, b] = [m[0], m[1], m[2]]
-          if (r < 0.99 || g < 0.99 || b < 0.99) {
-            nonWhite++
-            if (samples.length < 6) samples.push(`${drawIds[i]}(${r.toFixed(2)},${g.toFixed(2)},${b.toFixed(2)})`)
-          }
-        } catch {}
-      }
-      pushLog('inspect', `非白乘法色网格 ${nonWhite}/${drawIds.length}${samples.length ? ': ' + samples.join(' ') : ''}`)
-      state.inspect.multiply = nonWhite
-    } else {
-      pushLog('inspect', '该内核不暴露乘法色 API')
-    }
-  } catch (e) { pushLog('warn', '遮罩内省失败: ' + e.message) }
+  const groups = (() => {
+    try { return Object.keys(state.stage.model.internalModel.motionManager.definitions || {}) } catch { return [] }
+  })()
+  if (groups.length) pushLog('inspect', `动作组：${groups.join(', ')}`)
+  renderParams()
 }
 
-// ---------- 动作通路 ----------
+// ---------- 动作通路（内核原语 + 总线记录） ----------
 async function postAction(action, extra = {}) {
   const body = { id: crypto.randomUUID(), source: 'user', priority: 'NORMAL', fade: 0.3, action, ...extra }
   try {
@@ -347,95 +168,168 @@ async function postAction(action, extra = {}) {
     pushLog('bus', `${b2s(action)} → accepted(${j.effectivePriority})`)
   } catch (e) { pushLog('warn', '总线不可达: ' + e.message) }
 }
-const b2s = (a) => a.kind === 'expression' ? `表情:${a.name ?? '清除'}` : `${a.name ?? a.kind}`
+const b2s = (a) => (a.kind === 'expression' ? `表情:${a.name ?? '清除'}` : `${a.name ?? a.kind}`)
 
-function playMotion(m, i) {
-  const { model } = state
-  if (!model) return pushLog('warn', '模型未加载')
-  model.motion(m.group, indexInGroup(m, i), window.PIXI.live2d.MotionPriority.FORCE)
-  postAction({ kind: 'motion', name: m.name, group: m.group })
-}
 const indexInGroup = (m) => state.caps.motions.filter((x) => x.group === m.group).findIndex((x) => x.file === m.file)
 
-/** L2 表情层：支持多层叠加。同一参数由后应用的一层胜出（眼型组因此天然互斥） */
+async function playMotion(m) {
+  const { stage } = state
+  if (!stage) return pushLog('warn', '模型未加载')
+  const idx = indexInGroup(m)
+  if (idx < 0) return pushLog('warn', `动作不在组内：${m.name}`)
+  await stage.motion(m.group, idx, { priority: MotionPriority.FORCE })
+  pushLog('motion', `${m.name}（${m.group}#${idx}）`)
+  postAction({ kind: 'motion', name: m.name, group: m.group, index: idx })
+}
+
+// ---------- 表情叠加（L2） ----------
 function addExpression(name, { fade = 0.3 } = {}) {
   const def = state.caps.expressions.find((e) => e.name === name)
-  if (!def) { pushLog('warn', `没有表情: ${name}`); return false }
-  if (state.exprs.some((x) => x.name === name)) return true
-  state.exprs.push({ name, params: def.params, t0: state.fadeT || 0, fadeSec: Math.max(0, fade) })
-  pushLog('expr', `+ ${name}（${def.params.length} 参数）`)
+  if (!def) { pushLog('warn', `没有表情：${name}`); return false }
+  const ok = state.layers.addExpression(name, def.params, { fade })
+  if (ok) pushLog('expr', `+ ${name}（${def.params.length} 参数）`)
   renderExprChips()
-  return true
+  return ok
 }
 
 function removeExpression(name) {
-  const i = state.exprs.findIndex((x) => x.name === name)
-  if (i >= 0) { state.exprs.splice(i, 1); pushLog('expr', `− ${name}`); renderExprChips() }
-}
-
-function toggleExpression(name) {
-  if (state.exprs.some((x) => x.name === name)) removeExpression(name); else addExpression(name)
+  if (state.layers.removeExpression(name)) { pushLog('expr', `− ${name}`); renderExprChips() }
 }
 
 function clearExpressions() {
-  state.exprs.length = 0
+  const n = state.layers.clearExpressions()
   renderExprChips()
-  pushLog('expr', '清空')
+  pushLog('expr', `清空 ${n} 层`)
 }
 
 function renderExprChips() {
-  const host = $('#expr-chips')
-  if (!host) return
-  host.innerHTML = state.exprs.length
-    ? state.exprs.map((x) => `<span class="chip" data-x="${x.name}">${x.name} ×</span>`).join('') +
-      '<span class="chip ghost" data-clear="1">清空</span>'
+  const names = state.layers?.expressions() || []
+  $('#n-expr-on').textContent = names.length
+  $('#expr-chips').innerHTML = names.length
+    ? names.map((x) => `<span class="chip" data-x="${x}">${x} ×</span>`).join('') + '<span class="chip ghost" data-clear="1">清空</span>'
     : '<span class="meta">点左侧表情加入叠加</span>'
-  host.querySelectorAll('[data-x]').forEach((el) => el.onclick = () => removeExpression(el.dataset.x))
-  host.querySelector('[data-clear]')?.addEventListener('click', clearExpressions)
-}
-
-/** 每帧在动作之后、coreModel.update 之前叠层：L2 表情（可多层）→ L5 受控参数 */
-function applyLayers() {
-  const { model } = state
-  if (!model) return
-  const cm = model.internalModel.coreModel
-  for (const ex of state.exprs) {
-    const k = ex.fadeSec > 0 ? Math.min(1, Math.max(0, ((state.fadeT || 0) - ex.t0) / ex.fadeSec)) : 1
-    for (const p of ex.params) {
-      const cur = cm.getParameterValueById(p.Id)
-      if (cur == null) continue
-      const blend = p.Blend || 'Overwrite'
-      const target = blend === 'Multiply' ? cur * (1 + (p.Value - 1) * k)
-        : blend === 'Add' ? cur + p.Value * k
-          : cur + (p.Value - cur) * k
-      cm.setParameterValueById(p.Id, target)
-    }
-  }
-  for (const [id, v] of state.held) cm.setParameterValueById(id, v)
-  for (const [id, v] of state.partOverride || []) {
-    const pi = cm.getPartIndex ? cm.getPartIndex(id) : -1
-    if (pi >= 0) cm.setPartOpacityByIndex(pi, v)
-  }
-  state.fadeT = (state.fadeT || 0) + 1 / 60
-  state.layerCount = (state.layerCount || 0) + 1
+  $('#expr-chips').querySelectorAll('[data-x]').forEach((el) => (el.onclick = () => removeExpression(el.dataset.x)))
+  $('#expr-chips').querySelector('[data-clear]')?.addEventListener('click', clearExpressions)
+  $('#expressions').querySelectorAll('[data-e]').forEach((el) => {
+    const e = state.caps.expressions[Number(el.dataset.e)]
+    el.classList.toggle('on', names.includes(e.name))
+  })
 }
 
 function playExpression(e) {
-  const { model } = state
-  if (!model) return pushLog('warn', '模型未加载')
-  toggleExpression(e.name)
+  if (!state.stage) return pushLog('warn', '模型未加载')
+  if (state.layers.hasExpression(e.name)) removeExpression(e.name)
+  else addExpression(e.name)
   postAction({ kind: 'expression', name: e.name })
 }
 
+// ---------- 状态回传（L5 映射，演示用） ----------
 function sendState(s) {
   const mapped = state.stateMap[s] || {}
-  const { model } = state
-  if (model && mapped.expression) addExpression(mapped.expression, { fade: 0.25 })
-  postAction({ kind: 'state', state: s, map: mapped }, { source: 'state', priority: s === 'waiting' ? 'FORCE' : 'NORMAL', ttlMs: s === 'success' || s === 'error' ? 4000 : 0 })
+  if (mapped.expression) addExpression(mapped.expression, { fade: 0.25 })
+  postAction(
+    { kind: 'state', state: s, map: mapped },
+    { source: 'state', priority: s === 'waiting' ? 'FORCE' : 'NORMAL', ttlMs: s === 'success' || s === 'error' ? 4000 : 0 },
+  )
   pushLog('state', `${s} → ${mapped.expression || '（未配）'}`)
 }
 
-// ---------- 渲染 ----------
+// ---------- 可复现的验证钩子 ----------
+// ?expr=圈圈眼,流泪&motion=2&param=ParamAngleX:20&steps=30&hit=400,300&hidepart=Part10
+function applyDeepLink() {
+  const q = new URLSearchParams(location.search)
+  const { stage, layers, viewport } = state
+
+  if (q.get('bg')) {
+    const el = $('#stage')
+    el.classList.remove('checker')
+    el.style.background = q.get('bg')
+    $('#checker').checked = false
+  }
+  if (q.get('expr')) {
+    for (const n of q.get('expr').split(',')) addExpression(n.trim())
+    pushLog('deep', `表情 ${q.get('expr')}`)
+  }
+  if (q.get('motion')) {
+    const list = state.caps.motions.filter((x) => x.group === 'Action')
+    const m = list[Number(q.get('motion'))]
+    if (m) playMotion(m)
+  }
+  if (q.get('param')) {
+    for (const kv of q.get('param').split(',')) {
+      const [id, v] = kv.split(':')
+      if (!id || v == null) continue
+      if (layers.hold(id, Number(v))) pushLog('deep', `钉住 ${id}=${v}`)
+    }
+    renderHeld()
+  }
+  for (const id of (q.get('hidepart') || '').split(',').filter(Boolean)) {
+    if (layers.setPart(id, 0)) pushLog('probe', `隐藏部件 ${id}`)
+  }
+  for (const kv of (q.get('showpart') || '').split(',').filter(Boolean)) {
+    const [id, v] = kv.split(':')
+    if (layers.setPart(id, Number(v ?? 1))) pushLog('probe', `部件 ${id}=${v ?? 1}`)
+  }
+  if (q.get('zoom')) viewport.set({ zoom: Number(q.get('zoom')) })
+  if (q.get('offset')) {
+    const [ox = 0, oy = 0] = q.get('offset').split(',').map(Number)
+    viewport.set({ offsetX: ox, offsetY: oy })
+  }
+
+  // 命中反查：?hit=x,y —— 从屏幕坐标反查哪些网格盖住了这个点（区域标定的基础）
+  if (q.get('hit')) {
+    const [sx, sy] = q.get('hit').split(',').map(Number)
+    const p = stage.toModel(sx, sy)
+    const core = stage.core
+    const n = core.getDrawableCount()
+    const order = core.getDrawableRenderOrders ? core.getDrawableRenderOrders() : []
+    const hits = []
+    for (let i = 0; i < n; i++) {
+      const idx = core.getDrawableVertexIndices(i)
+      const vtx = stage.model.internalModel.getDrawableVertices(i)
+      if (!idx || !vtx) continue
+      for (let t = 0; t < idx.length; t += 3) {
+        const a = idx[t] * 2, b = idx[t + 1] * 2, c = idx[t + 2] * 2
+        if (pointInTri(p.x, p.y, vtx[a], vtx[a + 1], vtx[b], vtx[b + 1], vtx[c], vtx[c + 1])) {
+          hits.push({ i, id: String(core.getDrawableId(i).getString().s), order: order[i], opacity: core.getDrawableOpacity(i) })
+          break
+        }
+      }
+    }
+    hits.sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
+    pushLog('hit', `(${sx},${sy}) model=(${p.x.toFixed(0)},${p.y.toFixed(0)}) 命中 ${hits.length} 个`)
+    for (const h of hits.slice(-6)) pushLog('hit', `#${h.i} ${h.id} op=${h.opacity.toFixed(2)} order=${h.order}`)
+    document.title = `HIT ${hits.length} ${hits.slice(-2).map((h) => h.id).join(' ')}`
+  }
+
+  // 确定性步进：无头浏览器只渲一帧，用这个手动推进 N 帧再取样（也是 CI 钩子）
+  if (q.get('steps')) {
+    const n = Math.max(1, Number(q.get('steps')) || 60)
+    stage.step(n)
+    const core = stage.core
+    const probe = ['key1', 'key3', 'key4', 'key5', 'key6', 'key7']
+      .map((id) => `${id}=${Number(stage.param.get(id) ?? NaN).toFixed(2)}`)
+    const before = stage.param.get('key3')
+    stage.param.set('key3', 0.77)
+    const afterSet = stage.param.get('key3')
+    stage.step(1)
+    const afterUpdate = stage.param.get('key3')
+    pushLog('check', `步进 ${n} 帧 · 持久性 before=${before} set=${afterSet} afterUpdate=${afterUpdate}`)
+    const info = state.layers.inspect()
+    document.title = `DBG steps=${n} layers=${info.layers.map((l) => l.name).join('+') || '-'} conflicts=${info.conflictParams.length} ${probe.join(' ')}`
+  }
+}
+
+function pointInTri(px, py, ax, ay, bx, by, cx, cy) {
+  const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
+  const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
+  const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
+  const neg = d1 < 0 || d2 < 0 || d3 < 0
+  const pos = d1 > 0 || d2 > 0 || d3 > 0
+  return !(neg && pos)
+}
+
+// ---------- 面板渲染 ----------
 function renderMeta() {
   const c = state.caps
   $('#meta').innerHTML = `${c.model.name}<br>参数 ${c.params.length} · 部件 ${c.parts.length}<br>动作 ${c.motions.length} · 表情 ${c.expressions.length}`
@@ -446,67 +340,67 @@ function renderMeta() {
 
 function renderLists() {
   const c = state.caps
-  $('#motions').innerHTML = c.motions.map((m, i) => `<div class="item" data-m="${i}"><span class="nm">${m.name}</span><span class="tag">${m.duration ? m.duration.toFixed(1) + 's' : ''}${m.loop ? ' ⟳' : ''}</span></div>`).join('')
+  $('#motions').innerHTML = c.motions
+    .map((m, i) => `<div class="item" data-m="${i}"><span class="nm">${m.name}</span><span class="tag">${m.duration ? m.duration.toFixed(1) + 's' : ''}${m.group === 'Idle' ? ' idle' : ''}</span></div>`)
+    .join('')
   $('#expressions').innerHTML = c.expressions.map((e, i) => `<div class="item" data-e="${i}"><span class="nm">${e.name}</span></div>`).join('')
-  $('#motions').querySelectorAll('[data-m]').forEach((el) => el.onclick = () => {
-    el.parentElement.querySelectorAll('.item').forEach((x) => x.classList.remove('on')); el.classList.add('on')
-    playMotion(c.motions[Number(el.dataset.m)], Number(el.dataset.m))
-  })
-  $('#expressions').querySelectorAll('[data-e]').forEach((el) => el.onclick = () => {
-    const e = c.expressions[Number(el.dataset.e)]
-    playExpression(e)
-    el.classList.toggle('on', state.exprs.some((x) => x.name === e.name))
-  })
-  renderParams()
+
+  $('#motions').querySelectorAll('[data-m]').forEach((el) => (el.onclick = () => {
+    el.parentElement.querySelectorAll('.item').forEach((x) => x.classList.remove('on'))
+    el.classList.add('on')
+    playMotion(c.motions[Number(el.dataset.m)])
+  }))
+  $('#expressions').querySelectorAll('[data-e]').forEach((el) => (el.onclick = () => playExpression(c.expressions[Number(el.dataset.e)])))
+
   $('#q').oninput = () => {
     const q = $('#q').value.trim().toLowerCase()
     const hit = (s) => !q || s.toLowerCase().includes(q)
-    document.querySelectorAll('#motions .item').forEach((el) => { const m = c.motions[Number(el.dataset.m)]; el.style.display = hit(m.name) ? '' : 'none' })
-    document.querySelectorAll('#expressions .item').forEach((el) => { const e = c.expressions[Number(el.dataset.e)]; el.style.display = hit(e.name) ? '' : 'none' })
-    document.querySelectorAll('#params .item').forEach((el) => { el.style.display = hit(el.dataset.id) || hit(el.dataset.name) ? '' : 'none' })
+    document.querySelectorAll('#motions .item').forEach((el) => (el.style.display = hit(c.motions[Number(el.dataset.m)].name) ? '' : 'none'))
+    document.querySelectorAll('#expressions .item').forEach((el) => (el.style.display = hit(c.expressions[Number(el.dataset.e)].name) ? '' : 'none'))
+    document.querySelectorAll('#params .item').forEach((el) => (el.style.display = hit(el.dataset.id) || hit(el.dataset.name) ? '' : 'none'))
   }
 }
 
-function paramSource() { return state.runtimeParams?.length ? state.runtimeParams : state.caps.params }
+const paramSource = () => (state.runtimeParams?.length ? state.runtimeParams : state.caps.params)
 
 function renderParams() {
   const list = paramSource()
   $('#n-param').textContent = list.length
-  $('#params').innerHTML = list.map((p, i) =>
-    `<div class="item" data-i="${i}" data-id="${p.id}" data-name="${p.name}"><span class="nm">${p.name}</span><span class="tag">${p.id}</span></div>`).join('')
-  $('#params').querySelectorAll('[data-i]').forEach((el) => el.onclick = () => {
+  $('#params').innerHTML = list
+    .map((p, i) => `<div class="item" data-i="${i}" data-id="${p.id}" data-name="${p.name}"><span class="nm">${p.name}</span><span class="tag">${p.id}</span></div>`)
+    .join('')
+  $('#params').querySelectorAll('[data-i]').forEach((el) => (el.onclick = () => {
     el.classList.toggle('on')
-    if (el.classList.contains('on')) holdParam(list[Number(el.dataset.i)]); else state.held.delete(el.dataset.id), renderHeld()
-  })
+    if (el.classList.contains('on')) holdParam(list[Number(el.dataset.i)])
+    else { state.layers.release(el.dataset.id); renderHeld() }
+  }))
 }
 
 function holdParam(p) {
+  const cur = state.stage?.param.get(p.id) ?? p.default ?? 0
   if (p.min == null || p.max == null) { pushLog('warn', `${p.id} 缺范围，无法受控`); return }
-  const cur = state.model?.internalModel.coreModel.getParameterValueById(p.id) ?? p.default ?? 0
-  state.held.set(p.id, cur)
+  state.layers.hold(p.id, cur)
   renderHeld()
 }
 
 function renderHeld() {
-  const host = $('#held')
-  host.innerHTML = [...state.held.entries()].map(([id, v]) => {
-    const p = paramSource().find((x) => x.id === id) || { id, min: -1, max: 1, name: id }
-    return `<div class="item"><span class="nm" style="flex:0 0 78px;color:var(--dim)">${p.name}</span>
-      <span class="slider"><input type="range" data-id="${id}" min="${p.min}" max="${p.max}" step="${(p.max - p.min) / 200}" value="${v}">
+  const held = state.layers?.held() || []
+  $('#held').innerHTML = held
+    .map(([id, v]) => {
+      const p = paramSource().find((x) => x.id === id) || { id, min: -1, max: 1, name: id }
+      return `<div class="item"><span class="nm" style="flex:0 0 78px;color:var(--dim)">${p.name}</span>
+      <span class="slider"><input type="range" data-id="${id}" min="${p.min}" max="${p.max}" step="${(p.max - p.min) / 200 || 0.01}" value="${v}">
       <span class="val" data-val="${id}">${Number(v).toFixed(2)}</span></span></div>`
-  }).join('') || '<div class="meta">点左侧参数加入受控列表</div>'
-  host.querySelectorAll('input[type=range]').forEach((el) => el.oninput = () => {
-    const v = Number(el.value)
-    state.held.set(el.dataset.id, v)
-    host.querySelector(`[data-val="${el.dataset.id}"]`).textContent = v.toFixed(2)
-    applyHeld()
-  })
-}
+    })
+    .join('') || '<div class="meta">点左侧参数加入受控列表</div>'
 
-function applyHeld() {
-  const cm = state.model?.internalModel.coreModel
-  if (!cm) return
-  for (const [id, v] of state.held) cm.setParameterValueById(id, v)
+  $('#held').querySelectorAll('input[type=range]').forEach((el) => (el.oninput = () => {
+    const v = Number(el.value)
+    state.layers.hold(el.dataset.id, v)
+    $('#held').querySelector(`[data-val="${el.dataset.id}"]`).textContent = v.toFixed(2)
+  }))
+  // 解绑的面板同步
+  $('#params').querySelectorAll('[data-i]').forEach((el) => el.classList.toggle('on', held.some(([id]) => id === el.dataset.id)))
 }
 
 boot()

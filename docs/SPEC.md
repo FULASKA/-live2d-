@@ -14,7 +14,8 @@ DSH 只负责拉起与转发，Stage 是独立软件。
 
 | 来源 | 用来做什么 | 不用它做什么 |
 |---|---|---|
-| `pixi-live2d-display`（MIT） | 渲染、动作/表情播放、`focus()` 视线跟随、参数读写 | — |
+| `untitled-pixi-live2d-engine`（MIT，pixi 8） | 渲染、动作/表情播放、`focus()` 视线跟随、参数/部件读写、Cubism 5 乘法色 | — |
+| ~~`pixi-live2d-display@0.4`~~ | ~~Cubism 4 管线~~ **已弃用**，见 §2.1 | — |
 | `Tisitan/dsh-live2d-companion`（MIT） | Electron 透明窗、置顶、自动/手动穿透、面板骨架 | 不 fork 整个仓库，只取窗口与穿透实现作参考 |
 | `shinshin86/live2d-add-motion-web-ui`（MIT） | `motion3.json` 结构、关键帧→动作的生成与校验思路、循环接缝检查 | 不搬 Python 生成器；目标语言是 TS/浏览器 |
 | `dsh-xiaoke-widget`（本机，MIT） | `work-status` 事件归约（thinking/working/result/waiting/success/error + 优先级） | 不搬它的泡泡 UI |
@@ -31,6 +32,24 @@ DSH 只负责拉起与转发，Stage 是独立软件。
   - 「锁定比例」开关：开着时改窗口只等比缩放，模型内容不裁切；关掉则允许窗口比例变化、模型按 contain 重新适配。
 - 纯播放模式：只渲染角色与（可选）气泡；面板用右键唤出，面板不参与穿透判定。
 - 拖动区分：指针落在**模型不透明像素**上才响应互动；落在透明区 = 透传给下层软件。
+
+### 2.1 渲染内核（已拍板：换核）
+
+- **采用**：`pixi.js 8` + `untitled-pixi-live2d-engine`（MIT；内部是官方 Cubism 5 框架的封装，
+  原生支持 moc3 v5、逐网格乘法色/滤色、大贴图 LOD）。
+- **弃用原因**（实测，不是猜测）：原方案 `pixi-live2d-display@0.4` 走 Cubism 4 管线，不认逐网格乘法色。
+  本模型的鼻子阴影正是用乘法色做的 → 被画成一整块实心（旧内核里是黑块，换内核后变白块），
+  瞳孔同时丢色变灰白圈。已排除贴图缺失、UV 退化、贴图索引越界、遮罩错误四种可能。
+  换核后自动正常，**不需要**再隐藏 `Part10/Part46`（鼻子）之类的补丁。
+- **边界**：内核只经 `src/stage/engine.js` 访问；上层只拿原语（参数/部件/动作/表情/命中/时钟）。
+  若日后要换回官方 Cubism 5 SDK 直写渲染循环，只重写这一个文件。
+- **实测更新顺序**（决定自定义层挂哪里）：
+  `updateMotions` → `coreModel.saveParameters()` → 内核表情 → 眼眨 → 视线 `focus` → 自然运动 →
+  唇形 → 物理 → pose → **`beforeModelUpdate`** → `coreModel.update()`（算顶点） → `coreModel.loadParameters()`。
+  所以自定义分层（L2 表情叠加 / L5 受控参数 / 部件覆盖）一律挂在 `beforeModelUpdate`，
+  而**读参数校验必须在同一帧的该时刻读**，更新后读只会拿到被 `loadParameters()` 还原的基线值。
+- **引擎在渲染时才推进模型**：`model.update(dt)` 只累加，真正的 `internalModel.update()` 发生在渲染管线里。
+  因此确定性步进 = 「推进 delta → 渲染一次」，见 `stage.step()`。
 
 ## 3. 冲突仲裁（分层，后写覆盖先写）
 
@@ -106,7 +125,7 @@ profiles/
 | 本项目代码 | 可以（MIT） |
 | Cubism Core（`live2dcubismcore.min.js`） | **不可以**，专有许可；发布时引导用户自行下载 |
 | 大肥鱼模型（moc3/贴图/PSD） | **不可以**，作者明确禁止重新分发；只能由用户自备 |
-| 第三方库（pixi / pixi-live2d-display 等） | 可以（MIT） |
+| 第三方库（pixi / untitled-pixi-live2d-engine 等） | 可以（MIT） |
 
 发布形态：仓库不含任何模型与 Core；首次启动走「导入模型 / 下载 Core」向导。
 若未来商业化（对外销售），需另评估 Live2D 的 publication license 与模型作者授权。

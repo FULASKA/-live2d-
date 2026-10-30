@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Live2D Stage · 接口验证台</title>
 <link rel="stylesheet" href="./style.css">
+<script type="importmap">
+{ "imports": {
+  "pixi.js": "/vendor8/pixi.js/dist/pixi.mjs",
+  "untitled-pixi-live2d-engine/cubism": "/vendor8/untitled-pixi-live2d-engine/dist/cubism.es.js",
+  "@pixi/sound": "/vendor8/@pixi/sound/lib/index.mjs"
+} }
+</script>
 </head>
 <body>
 <div id="app">
@@ -18,7 +25,7 @@
   </aside>
 
   <main id="center">
-    <div id="stage" class="checker"><canvas id="cv"></canvas></div>
+    <div id="stage" class="checker"></div>
     <div id="hud">
       <label><input type="checkbox" id="gaze" checked> 视线跟随</label>
       <label>强度 <input type="range" id="gaze-int" min="0" max="1" step="0.05" value="0.6"></label>
