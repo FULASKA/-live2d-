@@ -27,7 +27,9 @@ DSH 只拉起它并转发状态，界面本体不嵌在 DSH 页面里。
 | 运行时参数内省 | ✅ | 取到每个参数的 min/max/default（静态文件给不出） |
 | 动作下发 | ✅ | 动作组 `Idle`/`Action` 注册成功 |
 | 表情叠加（自持 L2 层） | ✅ | `圈圈眼` 换眼型；`流泪+脸红` 同时成立（脸颊均色 159/148/176 vs 基线 157/154/182） |
-| 视线跟随（L1） | ✅ | 鼠标左上 → `ParamEyeBallX=-0.98`；右下 → `+0.97` |
+| 视线 + 头 + 身体跟随（L1） | ✅ | 鼠标在上 `eyeY=+0.67`、在下 `-0.71`；`ParamAngleX/Y/Z`、`ParamBodyAngleX/Y/Z` 同向联动 |
+| 分区互动 | ✅ | 自动铺 5 个热区（头/胸/腰/腿/尾巴），点击/抚摸/拖动分别触发；手绘区域 + 档案保存 |
+| 透明处穿透 | ✅ | 热区覆盖但像素 `alpha=0` → 判为未命中（点背景不触发反馈） |
 | 透明背景 | ✅ | 画布 `backgroundAlpha:0`，透明格可透出 |
 | 双路指令 | ✅ | `POST /api/action` 接受 agent/script 指令并回执 |
 | 权限 | ✅ | 无 token → 401 |
@@ -55,8 +57,20 @@ node scripts/shot.mjs --url "...?expr=圈圈眼" --mouse 120,120     # 顺便测
 /harness/?motion=2                    # 播第 2 个 Action
 /harness/?param=ParamAngleX:20        # 钉住某参数（L5）
 /harness/?hidepart=Part10,Part46      # 覆盖部件不透明度
+/harness/?tap=331,150                 # 模拟点按（stage 坐标），验证热区反馈
+/harness/?regionhit=331,150           # 只报告命中哪个热区 + alpha
+/harness/?regions=0                   # 关掉热区叠层
+/harness/?invertY=1                   # 轴向校正（极少数模型绑反时用）
 /harness/?zoom=1.4&offset=0,0.1       # 视口缩放/位移
 /harness/?checker=0&bg=%23ffffff      # 换背景
+```
+
+手势回归（真实指针事件，页面坐标）：
+
+```bash
+node scripts/shot.mjs --url "…/harness/" --drag "611,140,633,152"   # 摸头 → 爱心眼
+node scripts/shot.mjs --url "…/harness/" --drag "610,300,710,330"   # 拖动 → 只报手势
+node scripts/shot.mjs --url "…/harness/" --click "1188,124|300,250|340,255|345,300" --key Enter  # 画一个区域
 ```
 
 ## 结构
@@ -67,6 +81,8 @@ docs/PROTOCOL.md      接口契约 v0（DSH ↔ Stage）
 src/contracts.ts      契约类型
 src/stage/engine.js   渲染内核适配层（唯一直接碰内核的文件）
 src/stage/layers.js   L2 表情叠加 / L5 受控参数 / 部件覆盖
+src/stage/gaze.js     L1 眼 → 头 → 身体三通道跟随
+src/stage/regions.js  热区几何、自动铺初稿、手势识别（点/抚摸/拖动）
 src/stage/viewport.js 窗口 A 与模型 B 的绑定、缩放位移
 scripts/serve.mjs     开发版 Stage 服务器（静态 + 模型挂载 + ActionBus 桩）
 scripts/shot.mjs      无头验证：真实时间等待 → 取样 → 截图

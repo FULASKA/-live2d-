@@ -1,19 +1,20 @@
-// 验证台：证明「能力枚举 / 双路动作 / 参数叠加 / 视线跟随 / 命中反查」几条通路可用。
+// 验证台：能力枚举 / 双路动作 / 参数叠加 / 视线与身体跟随 / 分区互动 / 命中反查。
 // 只依赖 PROTOCOL.md 的接口 + src/stage 的内核适配层，不含产品 UI。
-//
-// 内核已换：pixi.js 8 + untitled-pixi-live2d-engine（Cubism 5）。
-// 旧页（pixi6 + pixi-live2d-display）已删除 —— 它不认乘法色，鼻子是黑块、瞳孔丢色。
 
-import { createStage, MotionPriority } from '../src/stage/engine.js'
+import { createStage, MotionPriority, csmText } from '../src/stage/engine.js'
 import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
+import { createGaze } from '../src/stage/gaze.js'
+import { createRegionStore, createRegionInput, seedRegions } from '../src/stage/regions.js'
 
 const $ = (s) => document.querySelector(s)
 const TOKEN = new URLSearchParams(location.search).get('token') || 'dev-token'
 
 const state = {
-  caps: null, stage: null, layers: null, viewport: null,
-  gaze: true, intensity: 0.6,
+  caps: null, stage: null, layers: null, viewport: null, gaze: null,
+  store: null, regionInput: null,
+  editor: { mode: null, points: [] },
+  gazeOn: true, intensity: 1,
   log: [],
   frames: 0,
   stateMap: {
@@ -22,9 +23,19 @@ const state = {
   },
 }
 
+/** 默认反馈：按热区名字配一套；用户可在面板里改 */
+const DEFAULT_REACTIONS = {
+  头: { tap: { expression: '脸红' }, pet: { expression: '爱心眼' } },
+  胸: { tap: { expression: '＞＜' } },
+  腰: { tap: { expression: '屑屑眼' } },
+  腿: { tap: { expression: '流冷汗' } },
+  尾巴: { tap: { expression: '尾巴开关' } },
+  手: { tap: { motion: '举手切默认手' } },
+}
+
 function pushLog(kind, text) {
   state.log.unshift({ kind, text, t: new Date().toLocaleTimeString() })
-  state.log.length = Math.min(state.log.length, 80)
+  state.log.length = Math.min(state.log.length, 60)
   $('#log').innerHTML = state.log
     .map((e) => `<div class="ev"><b>${e.kind}</b> ${e.text} <span style="float:right">${e.t}</span></div>`)
     .join('')
@@ -52,13 +63,28 @@ async function bootStage() {
     })
     state.stage = stage
     state.layers = createLayerStack({ param: stage.param, part: stage.part })
-    stage.onBeforeUpdate(() => state.layers.apply())
-    // 帧内取样：写在 coreModel.update() 之前一刻，这是唯一能读到「真正送进绘制」的值的位置
+    const q0 = new URLSearchParams(location.search)
+    state.gaze = createGaze({
+      param: stage.param,
+      options: { invertX: q0.has('invertX'), invertY: q0.has('invertY') },
+    })
+
+    // 分层顺序：先 L1 跟随，再 L2/L5（后写覆盖先写）
+    let lastT = performance.now()
+    stage.onBeforeUpdate(() => {
+      const now = performance.now()
+      const dt = Math.min(120, Math.max(1, now - lastT))
+      lastT = now
+      if (state.gazeOn) state.gaze.apply(dt)
+      state.layers.apply()
+    })
+    // 帧内取样：唯一能读到「真正送进绘制」的值的位置
     stage.onBeforeUpdate(() => {
       window.__frameParams = {
-        key1: stage.param.get('key1'), key2: stage.param.get('key2'), key7: stage.param.get('key7'),
-        headZ: stage.param.get('ParamAngleZ'),
+        key2: stage.param.get('key2'), key7: stage.param.get('key7'),
         eyeX: stage.param.get('ParamEyeBallX'), eyeY: stage.param.get('ParamEyeBallY'),
+        angleX: stage.param.get('ParamAngleX'), angleY: stage.param.get('ParamAngleY'), angleZ: stage.param.get('ParamAngleZ'),
+        bodyX: stage.param.get('ParamBodyAngleX'),
       }
     })
 
@@ -69,15 +95,16 @@ async function bootStage() {
     stage.app.ticker.add(() => {
       state.frames = stage.clocks().frames
       $('#fps').textContent = `FPS ${stage.ticker.FPS.toFixed(0)}`
+      drawOverlay()
     })
 
     pushLog('model', `已加载 ${state.caps.model.name}（Cubism 5 内核）`)
     introspect()
+    bootRegions()
     hookPointer()
     bindControls()
     applyDeepLink()
 
-    // 自动化入口（无头验证脚本用）：等这个标记再截图/取样
     window.__stage = state
     window.__ready = true
     document.title = `ready ${state.caps.model.name}`
@@ -89,24 +116,62 @@ async function bootStage() {
 }
 
 function bindControls() {
-  $('#gaze').onchange = (e) => { state.gaze = e.target.checked }
-  $('#gaze-int').oninput = (e) => { state.intensity = Number(e.target.value) }
+  $('#gaze').onchange = (e) => {
+    state.gazeOn = e.target.checked
+    state.gaze.set({ enabled: e.target.checked })
+  }
+  $('#gaze-int').oninput = (e) => {
+    state.intensity = Number(e.target.value)
+    state.gaze.set({ strength: state.intensity })
+  }
+  $('#show-regions').onchange = () => drawOverlay()
   $('#checker').onchange = (e) => $('#stage').classList.toggle('checker', e.target.checked)
   $('#send-state').onclick = () => sendState($('#state-sel').value)
+
+  $('#region-auto').onclick = () => autoSeed(true)
+  $('#region-clear').onclick = () => {
+    for (const r of state.store.all.slice()) state.store.remove(r.id)
+    saveProfile()
+    renderRegions()
+    pushLog('region', '清空全部热区')
+  }
+  $('#region-export').onclick = () => {
+    const blob = new Blob([JSON.stringify(state.store.toJSON(state.caps.model.name), null, 2)], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${state.caps.model.name}.profile.json`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    pushLog('profile', '档案已导出')
+  }
+  $('#region-draw').onclick = () => toggleDraw()
+  window.addEventListener('keydown', (e) => {
+    if (state.editor.mode !== 'draw') return
+    if (e.key === 'Enter') finishDraw()
+    if (e.key === 'Escape') { state.editor.points = []; pushLog('editor', '取消画区域'); drawOverlay() }
+  })
+  $('#stage').addEventListener('dblclick', () => { if (state.editor.mode === 'draw') finishDraw() })
+  $('#stage').addEventListener('pointerdown', (e) => {
+    if (state.editor.mode !== 'draw') return
+    const p = state.viewport.clientToModel(e.clientX, e.clientY)
+    state.editor.points.push([p.x, p.y])
+    pushLog('editor', `顶点 ${state.editor.points.length}`)
+    drawOverlay()
+  })
 }
 
-// ---------- 视线跟随（L1，可叠加，不抢占任何层） ----------
+// ---------- 跟随（L1） ----------
 function hookPointer() {
   window.addEventListener('pointermove', (e) => {
     const { stage } = state
-    if (!stage || !state.gaze) return
+    if (!stage || !state.gazeOn) return
     const r = stage.canvas.getBoundingClientRect()
     const sw = stage.app.screen.width, sh = stage.app.screen.height
-    const tx = ((e.clientX - r.left) / r.width) * sw
-    const ty = ((e.clientY - r.top) / r.height) * sh
-    // 强度 = 目标点向画面中心收缩的比例：0 = 完全不跟，1 = 跟满
-    const k = state.intensity
-    stage.focus(sw / 2 + (tx - sw / 2) * k, sh / 2 + (ty - sh / 2) * k)
+    const sx = ((e.clientX - r.left) / r.width) * sw
+    const sy = ((e.clientY - r.top) / r.height) * sh
+    // 归一化以**角色中心**为原点，而不是窗口中心：模型被拖动/偏置后方向也不会歪
+    const m = stage.model
+    state.gaze.setTargetFromScreen(sx, sy, m.position.x, m.position.y, sw / 2, sh / 2)
   })
 }
 
@@ -120,44 +185,233 @@ function introspect() {
   })
   pushLog('inspect', `运行时参数 ${stage.param.count} 个 / 部件 ${stage.part.count} 个`)
 
-  const model = stage.model
-  const tex = model.textures || []
-  pushLog('inspect', `贴图 ${tex.length} 张${tex[0]?.source?.pixelWidth ? ` / ${tex.map((t) => `${t.source.pixelWidth}x${t.source.pixelHeight}`).join(' ')}` : ''}`)
-
   const core = stage.core
   const n = core.getDrawableCount()
-  const ids = []
-  for (let i = 0; i < n; i++) ids.push(String(core.getDrawableId(i).getString().s))
   const masked = core.getDrawableMaskCounts ? Array.from(core.getDrawableMaskCounts()).filter((x) => x > 0).length : 0
-  pushLog('inspect', `网格 ${n} 个 · 带遮罩 ${masked}`)
-
-  // 换核后必须复核的一件事：乘法色真的生效了（鼻子阴影不再变块）
+  pushLog('inspect', `网格 ${n} 个 · 带遮罩 ${masked} · 画布 ${stage.modelSize().width}×${stage.modelSize().height}`)
   if (core.getMultiplyColor) {
     let nonWhite = 0
-    const samples = []
     for (let i = 0; i < n; i++) {
       try {
         const c = core.getMultiplyColor(i)
-        if (!c) continue
-        if (c.r < 0.99 || c.g < 0.99 || c.b < 0.99) {
-          nonWhite++
-          if (samples.length < 6) samples.push(`${ids[i]}(${c.r.toFixed(2)},${c.g.toFixed(2)},${c.b.toFixed(2)})`)
-        }
+        if (c && (c.r < 0.99 || c.g < 0.99 || c.b < 0.99)) nonWhite++
       } catch {}
     }
-    pushLog('inspect', `非白乘法色网格 ${nonWhite}/${n}${samples.length ? ': ' + samples.join(' ') : ''}`)
-  } else {
-    pushLog('warn', '内核仍未暴露乘法色表面 API')
+    pushLog('inspect', `非白乘法色网格 ${nonWhite}/${n}（换核后应大于 0）`)
   }
-
   const groups = (() => {
-    try { return Object.keys(state.stage.model.internalModel.motionManager.definitions || {}) } catch { return [] }
+    try { return Object.keys(stage.model.internalModel.motionManager.definitions || {}) } catch { return [] }
   })()
   if (groups.length) pushLog('inspect', `动作组：${groups.join(', ')}`)
   renderParams()
 }
 
-// ---------- 动作通路（内核原语 + 总线记录） ----------
+// ---------- 分区互动 ----------
+function partNameGetter() {
+  const byId = new Map(state.caps.parts.map((p) => [p.id, p.name]))
+  const core = state.stage.core
+  return {
+    get: (index) => byId.get(csmText(core.getPartId(index))) || '',
+  }
+}
+
+function autoSeed(reset = false) {
+  const { stage, store } = state
+  const seeded = seedRegions({
+    core: stage.core,
+    internalModel: stage.model.internalModel,
+    displayNames: partNameGetter(),
+    canvas: stage.modelSize(),
+  })
+  if (reset) for (const r of store.all.slice()) store.remove(r.id)
+  for (const r of seeded) store.add({ ...r, reaction: DEFAULT_REACTIONS[r.name] || {} })
+  saveProfile()
+  renderRegions()
+  pushLog('region', `自动铺出 ${seeded.length} 个热区：${seeded.map((r) => r.name).join('、')}`)
+  drawOverlay()
+}
+
+function bootRegions() {
+  const key = state.caps.model.name
+  state.store = createRegionStore([])
+  const loaded = state.store.load(key)
+  if (!loaded) {
+    autoSeed(false)
+    state.store.save(key)
+  } else {
+    renderRegions()
+    pushLog('region', `读到档案：${state.store.all.length} 个热区`)
+  }
+
+  state.regionInput = createRegionInput({
+    store: state.store,
+    viewport: state.viewport,
+    canvas: $('#stage'),
+    // 透明像素 = 穿透：热区几何盖到背景时，点击不该被吃掉
+    isOpaque: (p) => {
+      const sp = state.viewport.modelToScreen(p.x, p.y)
+      const { alpha } = state.stage.sampleAlpha(sp.x, sp.y)
+      return (alpha ?? 0) > 12
+    },
+    onEvent: onRegionEvent,
+  })
+  state.regionInput.attach($('#stage'))
+}
+
+function onRegionEvent(ev) {
+  if (state.editor.mode) return
+  const r = ev.region
+  switch (ev.type) {
+    case 'tap':
+      if (r) applyReaction(r, 'tap')
+      break
+    case 'pet':
+      if (r && ev.step === 1) applyReaction(r, 'pet')
+      break
+    case 'dragStart':
+      pushLog('gesture', `${r ? r.name : '背景'} · 拖动（产品里 = 移动窗口 / 区域拖拽，可配）`)
+      break
+    case 'up':
+      if (ev.kind === 'drag' && !r) pushLog('gesture', '背景拖动 → 视为窗口移动')
+      break
+    case 'enter':
+      if (r) $('#region-hint').textContent = `悬停：${r.name}`
+      break
+    case 'leave':
+      $('#region-hint').textContent = ''
+      break
+  }
+}
+
+function applyReaction(region, kind) {
+  const rx = region?.reaction?.[kind]
+  if (!rx) return
+  if (rx.expression) {
+    addExpression(rx.expression, { fade: 0.2 })
+    setTimeout(() => removeExpression(rx.expression), 4500)
+  }
+  if (rx.motion) {
+    const m = state.caps.motions.find((x) => x.name === rx.motion)
+    if (m) playMotion(m)
+  }
+  pushLog('region', `${region.name} · ${kind} → ${rx.expression || rx.motion || '（空）'}`)
+}
+
+function saveProfile() {
+  if (state.store) state.store.save(state.caps.model.name)
+}
+
+function renderRegions() {
+  const list = (state.store?.all || []).slice().sort((a, b) => b.z - a.z)
+  $('#n-region').textContent = list.length
+  const opts = (sel) => ['（无）', ...state.caps.expressions.map((e) => e.name)]
+    .map((n) => `<option value="${n === '（无）' ? '' : n}" ${(sel || '') === (n === '（无）' ? '' : n) ? 'selected' : ''}>${n}</option>`).join('')
+
+  $('#regions').innerHTML = list.map((r) => `
+    <div class="item" data-r="${r.id}" style="gap:6px">
+      <span class="nm" style="flex:0 0 52px">${r.name}</span>
+      <select data-exp="${r.id}" style="flex:1;min-width:0;background:#12141a;border:1px solid var(--line);border-radius:5px;color:var(--fg);font-size:11px">${opts(r.reaction?.tap?.expression)}</select>
+      <span class="chip ghost" data-del="${r.id}" title="删除">×</span>
+    </div>`).join('') || '<div class="meta">还没有热区，点「自动铺热区」或用「画区域」自己画</div>'
+
+  $('#regions').querySelectorAll('[data-exp]').forEach((el) => (el.onchange = () => {
+    const r = state.store.all.find((x) => x.id === el.dataset.exp)
+    r.reaction = { ...(r.reaction || {}), tap: { expression: el.value || undefined } }
+    saveProfile()
+    pushLog('region', `${r.name} 点击 → ${el.value || '（无）'}`)
+  }))
+  $('#regions').querySelectorAll('[data-del]').forEach((el) => (el.onclick = () => {
+    state.store.remove(el.dataset.del)
+    saveProfile()
+    renderRegions()
+    drawOverlay()
+  }))
+}
+
+function toggleDraw() {
+  if (state.editor.mode === 'draw') { state.editor.mode = null; state.editor.points = [] }
+  else { state.editor.mode = 'draw'; state.editor.points = [] }
+  $('#region-draw').classList.toggle('on', state.editor.mode === 'draw')
+  $('#region-hint').textContent = state.editor.mode === 'draw'
+    ? '点击加顶点 · 回车/双击闭合 · Esc 取消'
+    : ''
+  drawOverlay()
+}
+
+function finishDraw() {
+  const pts = state.editor.points
+  if (pts.length < 3) { pushLog('editor', '至少 3 个点'); return }
+  const r = state.store.add({ name: `区域${state.store.all.length + 1}`, points: pts, z: 20 })
+  state.editor.points = []
+  state.editor.mode = null
+  $('#region-draw').classList.remove('on')
+  $('#region-hint').textContent = ''
+  saveProfile()
+  renderRegions()
+  pushLog('editor', `新建 ${r.name}（${pts.length} 顶点）`)
+  drawOverlay()
+}
+
+// ---------- 热区叠层 ----------
+function drawOverlay() {
+  const c = $('#overlay')
+  if (!c || !state.viewport) return
+  const host = $('#stage')
+  const dpr = window.devicePixelRatio || 1
+  const w = host.clientWidth, h = host.clientHeight
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr)
+    c.height = Math.round(h * dpr)
+  }
+  const ctx = c.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, w, h)
+  if (!state.store || !$('#show-regions').checked) return
+
+  const hovered = state.regionInput?.hovered
+  const pressed = state.regionInput?.pressed?.region
+  const path = (points) => {
+    ctx.beginPath()
+    points.forEach(([mx, my], i) => {
+      const p = state.viewport.modelToScreen(mx, my)
+      if (i === 0) ctx.moveTo(p.x, p.y)
+      else ctx.lineTo(p.x, p.y)
+    })
+    ctx.closePath()
+  }
+
+  for (const r of state.store.all) {
+    const on = r === hovered || r === pressed
+    path(r.points)
+    ctx.fillStyle = on ? 'rgba(120,180,255,0.16)' : 'rgba(120,180,255,0.05)'
+    ctx.fill()
+    ctx.lineWidth = on ? 2 : 1
+    ctx.strokeStyle = on ? 'rgba(150,200,255,0.95)' : 'rgba(120,170,230,0.5)'
+    ctx.stroke()
+    const b = r.points.reduce((a, [x, y]) => ({ x: a.x + x, y: a.y + y }), { x: 0, y: 0 })
+    const c0 = state.viewport.modelToScreen(b.x / r.points.length, b.y / r.points.length)
+    ctx.fillStyle = on ? '#dbe9ff' : 'rgba(190,215,245,0.75)'
+    ctx.font = '11px system-ui'
+    ctx.textAlign = 'center'
+    ctx.fillText(r.name, c0.x, c0.y)
+  }
+
+  if (state.editor.points.length) {
+    path(state.editor.points)
+    ctx.strokeStyle = '#ffd166'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    for (const [mx, my] of state.editor.points) {
+      const p = state.viewport.modelToScreen(mx, my)
+      ctx.fillStyle = '#ffd166'
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+}
+
+// ---------- 动作通路 ----------
 async function postAction(action, extra = {}) {
   const body = { id: crypto.randomUUID(), source: 'user', priority: 'NORMAL', fade: 0.3, action, ...extra }
   try {
@@ -223,7 +477,7 @@ function playExpression(e) {
   postAction({ kind: 'expression', name: e.name })
 }
 
-// ---------- 状态回传（L5 映射，演示用） ----------
+// ---------- 状态回传（演示） ----------
 function sendState(s) {
   const mapped = state.stateMap[s] || {}
   if (mapped.expression) addExpression(mapped.expression, { fade: 0.25 })
@@ -234,18 +488,19 @@ function sendState(s) {
   pushLog('state', `${s} → ${mapped.expression || '（未配）'}`)
 }
 
-// ---------- 可复现的验证钩子 ----------
-// ?expr=圈圈眼,流泪&motion=2&param=ParamAngleX:20&steps=30&hit=400,300&hidepart=Part10
+// ---------- 可复现钩子 ----------
+// ?expr=…&motion=2&param=…&steps=30&hit=x,y&regionhit=x,y&tap=x,y&hidepart=…
 function applyDeepLink() {
   const q = new URLSearchParams(location.search)
   const { stage, layers, viewport } = state
 
   if (q.get('bg')) {
-    const el = $('#stage')
-    el.classList.remove('checker')
-    el.style.background = q.get('bg')
+    $('#stage').classList.remove('checker')
+    $('#stage').style.background = q.get('bg')
     $('#checker').checked = false
   }
+  if (q.get('regions') === '0') { $('#show-regions').checked = false; $('#region-hint').textContent = '' }
+  if (q.get('gaze') === '0') { $('#gaze').checked = false; state.gazeOn = false; state.gaze.set({ enabled: false }) }
   if (q.get('expr')) {
     for (const n of q.get('expr').split(',')) addExpression(n.trim())
     pushLog('deep', `表情 ${q.get('expr')}`)
@@ -266,17 +521,28 @@ function applyDeepLink() {
   for (const id of (q.get('hidepart') || '').split(',').filter(Boolean)) {
     if (layers.setPart(id, 0)) pushLog('probe', `隐藏部件 ${id}`)
   }
-  for (const kv of (q.get('showpart') || '').split(',').filter(Boolean)) {
-    const [id, v] = kv.split(':')
-    if (layers.setPart(id, Number(v ?? 1))) pushLog('probe', `部件 ${id}=${v ?? 1}`)
-  }
   if (q.get('zoom')) viewport.set({ zoom: Number(q.get('zoom')) })
   if (q.get('offset')) {
     const [ox = 0, oy = 0] = q.get('offset').split(',').map(Number)
     viewport.set({ offsetX: ox, offsetY: oy })
   }
 
-  // 命中反查：?hit=x,y —— 从屏幕坐标反查哪些网格盖住了这个点（区域标定的基础）
+  // 热区命中反查（屏幕坐标，相对 stage 左上角）：标定/回归用
+  if (q.get('regionhit') || q.get('tap')) {
+    const [sx, sy] = (q.get('regionhit') || q.get('tap')).split(',').map(Number)
+    const p = viewport.toModelLocal(sx, sy)
+    let r = state.store.hit(p.x, p.y)
+    const { alpha } = stage.sampleAlpha(sx, sy)
+    const opaque = (alpha ?? 0) > 12
+    if (r && !opaque) r = null   // 透明处穿透，不算命中
+    pushLog('region', `(${sx},${sy}) → 模型(${Math.round(p.x)},${Math.round(p.y)}) alpha=${alpha} 命中：${r ? r.name : '无'}`)
+    if (q.get('tap')) {
+      if (r) applyReaction(r, 'tap')
+      document.title = `TAP ${r ? r.name : 'miss'}`
+    }
+  }
+
+  // 命中反查（网格级）
   if (q.get('hit')) {
     const [sx, sy] = q.get('hit').split(',').map(Number)
     const p = stage.toModel(sx, sy)
@@ -291,33 +557,27 @@ function applyDeepLink() {
       for (let t = 0; t < idx.length; t += 3) {
         const a = idx[t] * 2, b = idx[t + 1] * 2, c = idx[t + 2] * 2
         if (pointInTri(p.x, p.y, vtx[a], vtx[a + 1], vtx[b], vtx[b + 1], vtx[c], vtx[c + 1])) {
-          hits.push({ i, id: String(core.getDrawableId(i).getString().s), order: order[i], opacity: core.getDrawableOpacity(i) })
+          hits.push({ i, id: String(core.getDrawableId(i).getString().s), order: order[i] })
           break
         }
       }
     }
     hits.sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
-    pushLog('hit', `(${sx},${sy}) model=(${p.x.toFixed(0)},${p.y.toFixed(0)}) 命中 ${hits.length} 个`)
-    for (const h of hits.slice(-6)) pushLog('hit', `#${h.i} ${h.id} op=${h.opacity.toFixed(2)} order=${h.order}`)
+    pushLog('hit', `(${sx},${sy}) 命中 ${hits.length} 个网格`)
+    for (const h of hits.slice(-6)) pushLog('hit', `#${h.i} ${h.id} order=${h.order}`)
     document.title = `HIT ${hits.length} ${hits.slice(-2).map((h) => h.id).join(' ')}`
   }
 
-  // 确定性步进：无头浏览器只渲一帧，用这个手动推进 N 帧再取样（也是 CI 钩子）
   if (q.get('steps')) {
     const n = Math.max(1, Number(q.get('steps')) || 60)
     stage.step(n)
-    const core = stage.core
-    const probe = ['key1', 'key3', 'key4', 'key5', 'key6', 'key7']
+    const probe = ['key2', 'key7']
       .map((id) => `${id}=${Number(stage.param.get(id) ?? NaN).toFixed(2)}`)
-    const before = stage.param.get('key3')
-    stage.param.set('key3', 0.77)
-    const afterSet = stage.param.get('key3')
-    stage.step(1)
-    const afterUpdate = stage.param.get('key3')
-    pushLog('check', `步进 ${n} 帧 · 持久性 before=${before} set=${afterSet} afterUpdate=${afterUpdate}`)
+    pushLog('check', `步进 ${n} 帧 · ${probe.join(' ')}`)
     const info = state.layers.inspect()
-    document.title = `DBG steps=${n} layers=${info.layers.map((l) => l.name).join('+') || '-'} conflicts=${info.conflictParams.length} ${probe.join(' ')}`
+    document.title = `DBG steps=${n} layers=${info.layers.map((l) => l.name).join('+') || '-'} ${probe.join(' ')}`
   }
+  drawOverlay()
 }
 
 function pointInTri(px, py, ax, ay, bx, by, cx, cy) {
@@ -341,7 +601,7 @@ function renderMeta() {
 function renderLists() {
   const c = state.caps
   $('#motions').innerHTML = c.motions
-    .map((m, i) => `<div class="item" data-m="${i}"><span class="nm">${m.name}</span><span class="tag">${m.duration ? m.duration.toFixed(1) + 's' : ''}${m.group === 'Idle' ? ' idle' : ''}</span></div>`)
+    .map((m, i) => `<div class="item" data-m="${i}"><span class="nm">${m.name}</span><span class="tag">${m.duration ? m.duration.toFixed(1) + 's' : ''}</span></div>`)
     .join('')
   $('#expressions').innerHTML = c.expressions.map((e, i) => `<div class="item" data-e="${i}"><span class="nm">${e.name}</span></div>`).join('')
 
@@ -399,7 +659,6 @@ function renderHeld() {
     state.layers.hold(el.dataset.id, v)
     $('#held').querySelector(`[data-val="${el.dataset.id}"]`).textContent = v.toFixed(2)
   }))
-  // 解绑的面板同步
   $('#params').querySelectorAll('[data-i]').forEach((el) => el.classList.toggle('on', held.some(([id]) => id === el.dataset.id)))
 }
 

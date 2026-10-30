@@ -82,5 +82,26 @@ export function createViewport({ model, app, margin = 0.95 } = {}) {
         bounds,
       }
     },
+    /** 模型坐标 → 屏幕像素（画热区叠层用） */
+    modelToScreen(mx, my) {
+      const s = model.scale.x || 1
+      const { mw, mh } = modelSize()
+      return {
+        x: model.position.x + (mx - mw / 2) * s,
+        y: model.position.y + (my - mh / 2) * s,
+      }
+    },
+    /** 指针事件坐标 → 模型坐标（自动抵消 canvas 的 CSS 尺寸与渲染尺寸差异） */
+    clientToModel(clientX, clientY) {
+      const el = app.canvas
+      const rect = el.getBoundingClientRect()
+      const kx = (app.screen.width || rect.width) / (rect.width || 1)
+      const ky = (app.screen.height || rect.height) / (rect.height || 1)
+      const sx = (clientX - rect.left) * kx
+      const sy = (clientY - rect.top) * ky
+      const s = model.scale.x || 1
+      const { mw, mh } = modelSize()
+      return { x: (sx - model.position.x) / s + mw / 2, y: (sy - model.position.y) / s + mh / 2 }
+    },
   }
 }

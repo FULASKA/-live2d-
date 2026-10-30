@@ -20,6 +20,9 @@ const OUT = arg('out', 'tmp/shot.png')
 const WAIT = Number(arg('wait', 30000))
 const EVAL = arg('eval', '')
 const MOUSE = arg('mouse', '')
+const CLICK = arg('click', '')
+const KEY = arg('key', '')
+const DRAG = arg('drag', '')
 const W = Number(arg('width', 1280))
 const H = Number(arg('height', 800))
 
@@ -66,6 +69,32 @@ const main = async () => {
       const [mx, my] = MOUSE.split(',').map(Number)
       await new Promise((r) => setTimeout(r, 600))
       await page.mouse.move(mx, my, { steps: 8 })
+    }
+
+    // 点击序列：--click "x,y|x,y|…"（页面坐标，用来走 UI 流程）
+    if (CLICK) {
+      await new Promise((r) => setTimeout(r, 500))
+      for (const pair of CLICK.split('|')) {
+        const [cx, cy] = pair.split(',').map(Number)
+        await page.mouse.click(cx, cy)
+        await new Promise((r) => setTimeout(r, 120))
+      }
+    }
+    // 拖拽注入：--drag "x1,y1,x2,y2[,steps]"（验证抚摸 / 拖动判定）
+    if (DRAG) {
+      const [x1, y1, x2, y2, steps = 10] = DRAG.split(',').map(Number)
+      await new Promise((r) => setTimeout(r, 400))
+      await page.mouse.move(x1, y1)
+      await page.mouse.down()
+      await page.mouse.move(x2, y2, { steps })
+      await new Promise((r) => setTimeout(r, 120))
+      await page.mouse.up()
+      await new Promise((r) => setTimeout(r, 200))
+    }
+
+    if (KEY) {
+      await page.keyboard.press(KEY)
+      await new Promise((r) => setTimeout(r, 200))
     }
 
     // 稳定几帧再取样

@@ -220,6 +220,27 @@ export async function createStage(o = {}) {
 
   const size = () => ({ width: app.screen.width, height: app.screen.height })
 
+  /**
+   * 采样某点是否被角色覆盖（alpha）。给「透明处穿透 / 不透明处才互动」用。
+   * 做法是先强制渲染一帧再 readPixels —— 只在点击这类低频事件上调用，不进每帧路径。
+   * @returns {{alpha:number|null, error?:string}} alpha 0..255，null 表示取不到
+   */
+  const sampleAlpha = (x, y) => {
+    try {
+      app.renderer.render(app.stage)
+      const gl = app.renderer.gl
+      const res = app.renderer.resolution || 1
+      const px = Math.round(x * res)
+      const py = Math.round(app.renderer.height - y * res - 1)
+      if (px < 0 || py < 0 || px >= app.renderer.width || py >= app.renderer.height) return { alpha: 0 }
+      const buf = new Uint8Array(4)
+      gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf)
+      return { alpha: buf[3], rgba: [buf[0], buf[1], buf[2], buf[3]] }
+    } catch (e) {
+      return { alpha: null, error: String(e && e.message || e) }
+    }
+  }
+
   const resize = (w, h) => {
     const W = Math.max(1, Math.round(w))
     const H = Math.max(1, Math.round(h))
@@ -238,7 +259,7 @@ export async function createStage(o = {}) {
     ticker: app.ticker,
     onBeforeUpdate(fn) { beforeHooks.add(fn); return () => beforeHooks.delete(fn) },
     motion, stopMotions, setExpression,
-    modelSize, size, resize, toModel, hitTest,
+    modelSize, size, resize, toModel, hitTest, sampleAlpha,
     focus: (x, y, instant) => model.focus(x, y, instant),
     destroy() {
       beforeHooks.clear()
