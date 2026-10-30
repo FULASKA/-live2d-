@@ -296,41 +296,95 @@ export async function createStage(o = {}) {
   }
 
   /**
-   * 整帧 alpha 缩略掩码：给「透明处穿透、只按角色轮廓接收鼠标」用。
-   * 一次渲染 + 一次全帧 readPixels，再按 scale 降采样（每格取最大 alpha）。
-   * 全帧读回来是为了不额外折腾 RenderTexture；520×760 也就 1.5MB，低频调用没问题。
+   * 掩码降采样：每格取块内 5 个采样点（中心 + 四角内缩一格）的 alpha 最大值。
+   * 原来是逐像素扫全帧求块内最大值（395k 次内层循环），采样点法降到 123k 次，
+   * 边缘抖动本来就有 3×3 膨胀兜着，看不出差别。
+   * readPixels 原点在左下，输出翻成屏幕坐标（左上原点），和区域坐标一致。
+   */
+  const downsampleMask = (buf, W, H, s) => {
+    const w = Math.max(1, Math.ceil(W / s))
+    const h = Math.max(1, Math.ceil(H / s))
+    const data = new Uint8Array(w * h)
+    const off = Math.floor(s / 2)
+    for (let by = 0; by < h; by++) {
+      const rowBase = by * s
+      for (let bx = 0; bx < w; bx++) {
+        const colBase = bx * s
+        let best = 0
+        for (let k = 0; k < 5; k++) {
+          const sx = Math.min(W - 1, colBase + (k === 0 ? off : (k <= 2 ? 1 : s - 2)))
+          const sy = Math.min(H - 1, rowBase + (k === 0 ? off : (k === 1 || k === 3 ? 1 : s - 2)))
+          const a = buf[(sy * W + sx) * 4 + 3]
+          if (a > best) best = a
+          if (best > 200) break
+        }
+        if (best) data[(h - 1 - by) * w + bx] = best
+      }
+    }
+    let hits = 0
+    for (let i = 0; i < data.length; i++) if (data[i] > 8) hits++
+    return { w, h, scale: s, coverage: hits / data.length, data }
+  }
+
+  /** 读回整个绘制缓冲区（不重画，所以必须紧跟在同一任务里刚渲染完的位置） */
+  const readFrameAlpha = () => {
+    const gl = app.renderer.gl
+    const W = app.renderer.width
+    const H = app.renderer.height
+    const buf = new Uint8Array(W * H * 4)
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf)
+    return { buf, W, H }
+  }
+
+  /**
+   * 从「已经画好的那一帧」取掩码 —— 不重画。
+   *
+   * 关键取舍：原先这里在指针移动时自己再画一整帧（实测 10.8ms/次），
+   * 而主线程本来每帧就在画同一张图，纯属重复劳动；更糟的是在事件回调里
+   * 插入一次计划外的渲染，掉帧时合成器会短暂显示上一帧（虚影/闪烁）。
+   * 现在只在渲染钩子（afterRender）里读回，代价只剩读像素 + 降采样。
    * @returns {{w:number,h:number,scale:number,coverage:number,data:Uint8Array}|null}
    */
-  const alphaMask = (scale = 4) => {
+  const captureMask = (scale = 4, onPhase = null) => {
+    const phase = onPhase || (() => {})
+    let t = performance.now()
     try {
-      app.renderer.render(app.stage)
-      const gl = app.renderer.gl
-      const W = app.renderer.width
-      const H = app.renderer.height
-      const buf = new Uint8Array(W * H * 4)
-      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf)
-      const s = Math.max(1, Math.round(scale))
-      const w = Math.max(1, Math.ceil(W / s))
-      const h = Math.max(1, Math.ceil(H / s))
-      const data = new Uint8Array(w * h)
-      for (let row = 0; row < H; row++) {
-        const dstRow = h - 1 - Math.floor(row / s) // readPixels 原点在左下，翻成屏幕坐标
-        const base = dstRow * w
-        for (let col = 0; col < W; col++) {
-          const a = buf[(row * W + col) * 4 + 3]
-          if (!a) continue
-          const idx = base + Math.floor(col / s)
-          if (a > data[idx]) data[idx] = a
-        }
-      }
-      let hits = 0
-      for (let i = 0; i < data.length; i++) if (data[i] > 8) hits++
-      return { w, h, scale: s, coverage: hits / data.length, data }
+      const { buf, W, H } = readFrameAlpha()
+      const n = performance.now(); phase('read', n - t); t = n
+      const out = downsampleMask(buf, W, H, Math.max(1, Math.round(scale)))
+      phase('down', performance.now() - t)
+      return out
     } catch (e) {
-      console.warn('[alphaMask]', e && e.message || e)
+      console.warn('[captureMask]', (e && e.message) || e)
       return null
     }
   }
+
+  /** 强制同步版：需要当场拿到结果时用（改窗口尺寸、展开面板这类低频时机） */
+  const alphaMask = (scale = 4, onPhase = null) => {
+    const phase = onPhase || (() => {})
+    let t = performance.now()
+    try {
+      app.renderer.render(app.stage)
+      const n = performance.now(); phase('render', n - t); t = n
+      const { buf, W, H } = readFrameAlpha()
+      const n2 = performance.now(); phase('read', n2 - t); t = n2
+      const out = downsampleMask(buf, W, H, Math.max(1, Math.round(scale)))
+      phase('down', performance.now() - t)
+      return out
+    } catch (e) {
+      console.warn('[alphaMask]', (e && e.message) || e)
+      return null
+    }
+  }
+
+  // 渲染之后的钩子：priority 必须低于 app.render（LOW = -25），确保图案已经画进画布
+  const afterRenderHooks = new Set()
+  app.ticker.add(() => {
+    for (const fn of afterRenderHooks) {
+      try { fn() } catch (e) { console.error('[stage] afterRender 失败', e) }
+    }
+  }, undefined, -30)
 
   const resize = (w, h) => {
     const W = Math.max(1, Math.round(w))
@@ -349,10 +403,12 @@ export async function createStage(o = {}) {
     stop: () => app.stop(),
     ticker: app.ticker,
     onBeforeUpdate(fn) { beforeHooks.add(fn); return () => beforeHooks.delete(fn) },
+    /** 每帧「画完之后」调用（掩码读回必须挂这里，不能自己再画一帧） */
+    afterRender(fn) { afterRenderHooks.add(fn); return () => afterRenderHooks.delete(fn) },
     /** 在 physics.evaluate 之前一刻调用（物理输入参数必须在这里写） */
     onBeforePhysics(fn) { beforePhysicsHooks.add(fn); return () => beforePhysicsHooks.delete(fn) },
     motion, stopMotions, setExpression,
-    modelSize, size, resize, toModel, hitTest, sampleAlpha, sampleAlphaRegion, alphaMask,
+    modelSize, size, resize, toModel, hitTest, sampleAlpha, sampleAlphaRegion, alphaMask, captureMask,
     focus: (x, y, instant) => model.focus(x, y, instant),
     destroy() {
       beforeHooks.clear()

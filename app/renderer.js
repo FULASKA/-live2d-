@@ -4,12 +4,14 @@ import { createStage } from '../src/stage/engine.js'
 import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
-import { createRegionStore, createRegionInput, seedRegions, faceRegions } from '../src/stage/regions.js'
+import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
+import { createProfiler } from '../src/stage/perf.js'
 
 const $ = (s) => document.querySelector(s)
+const perf = createProfiler()
 const TOGGLE_SET = new Set(['胸口衣服', '裙子切换', '脱鞋', '尾巴开关'])
 
 /** 浏览器里打开 /app/ 时没有 Electron 预加载：给一套空壳，方便无头验证渲染 */
@@ -34,7 +36,8 @@ const shell = window.shell || {
 const state = {
   caps: null, stage: null, layers: null, viewport: null, gaze: null,
   store: null, regionInput: null, reactions: null, settings: null,
-  mask: null, maskAt: 0, ignoring: false, pointerDown: false,
+  mask: null, maskAt: 0, maskPending: false, windowDragging: false,
+  ignoring: false, pointerDown: false,
   physics: { inputs: new Set(), outputs: new Set() },
 }
 
@@ -45,6 +48,32 @@ function toast(text, ms = 1800) {
   el.classList.add('show')
   clearTimeout(toast._t)
   toast._t = setTimeout(() => el.classList.remove('show'), ms)
+}
+
+// ---------- 性能浮层（F3 开关；统计常驻，探针用 window.__perf.snapshot()） ----------
+window.__perf = perf
+function bootPerfOverlay() {
+  state.stage?.ticker?.add?.(() => perf.frame())
+  let el = null
+  let timer = 0
+  const paint = () => {
+    if (!el) return
+    const s = perf.snapshot(false)
+    const row = (k, label) => (s[k] ? `<span>${label} <b>${s[k].avg.toFixed(1)}</b>ms · max ${s[k].max.toFixed(1)} · ${s[k].n}次</span>` : '')
+    el.innerHTML = `<b>${s.fps.toFixed(1)} fps</b><br>` +
+      row('dt', '帧间隔') + row('pre', '每帧逻辑') + row('pass', '穿透判定') +
+      row('mask', '遮罩重建') + row('face', '脸部热区')
+  }
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'F3') return
+    e.preventDefault()
+    if (el) { el.remove(); el = null; clearInterval(timer); timer = 0; return }
+    el = document.createElement('div')
+    el.id = 'perf'
+    document.body.appendChild(el)
+    timer = setInterval(paint, 250)
+    paint()
+  })
 }
 
 async function main() {
@@ -59,6 +88,7 @@ async function main() {
     bindResizeHandles()
     bindReactionEditor()
     bindPassThrough()
+    bootPerfOverlay()
     document.title = `stage · ${state.caps.model.name}`
   } catch (e) {
     console.error(e)
@@ -124,10 +154,12 @@ async function bootStage() {
     const now = performance.now()
     const dt = Math.min(120, Math.max(1, now - lastT))
     lastT = now
-    state.gaze.apply(dt)
-    state.layers.apply()
-    state.petSway.apply(dt)
-    state.facePinch?.apply(dt)
+    perf.time('pre', () => {
+      state.gaze.apply(dt)
+      state.layers.apply()
+      state.petSway.apply(dt)
+      state.facePinch?.apply(dt)
+    })
   })
 
   const viewport = createViewport({ model: stage.model, app: stage.app })
@@ -183,9 +215,11 @@ function bootRegions() {
   const key = state.caps.model.name
   state.store = createRegionStore([])
   const bands = ['头', '胸', '腰', '裙摆', '腿', '脚', '尾巴']
+  // 部件 id → 显示名走 Map：原来每次都是一次 148 项线性查找，采样期被调用上百次
+  const partNameById = new Map((state.caps.parts || []).map((p) => [p.id, p.name]))
   const names = {
     get: (i) => {
-      try { return state.caps.parts.find((p) => p.id === state.stage.core.getPartId(i).getString().s)?.name || '' } catch { return '' }
+      try { return partNameById.get(state.stage.core.getPartId(i).getString().s) || '' } catch { return '' }
     },
   }
   const loaded = state.store.load(key)
@@ -222,29 +256,28 @@ function bootRegions() {
   // 左/右脸热区要**跟着变形走**：前倾这类动作会让脸整体下移，
   // 热区若固定在初始位置就会「摸脸点到胸」。这里按当前蒙皮顶点周期重算（只改内存，不改存档）。
   function startFaceRegionTracking(partNames) {
-  let last = 0
-  setInterval(() => {
-    const now = performance.now()
-    if (now - last < 120) return
-    last = now
-    const cur = state.store.all.filter((r) => r.name === '左脸' || r.name === '右脸')
-    if (cur.length !== 2) return
-    let fresh = []
-    try {
-      fresh = faceRegions({
-        core: state.stage.core,
-        internalModel: state.stage.model.internalModel,
-        displayNames: partNames,
-        canvas: state.stage.modelSize(),
+    // 索引表缓存一次，之后每次只取那几个 drawable 的顶点（原来每次都要全量扫 715 个）
+    const reader = createFaceZoneReader({
+      core: state.stage.core,
+      internalModel: state.stage.model.internalModel,
+      displayNames: partNames,
+      canvas: state.stage.modelSize(),
+    })
+    state.faceReader = reader
+    setInterval(() => {
+      const cur = state.store.all.filter((r) => r.name === '左脸' || r.name === '右脸')
+      if (cur.length !== 2) return
+      let fresh = []
+      perf.time('face', () => {
+        try { fresh = reader.read() } catch { fresh = [] }
       })
-    } catch { return }
-    if (fresh.length !== 2) return
-    for (const r of cur) {
-      const f = fresh.find((x) => x.name === r.name)
-      if (f) r.points = f.points
-    }
-  }, 120)
-}
+      if (fresh.length !== 2) return
+      for (const r of cur) {
+        const f = fresh.find((x) => x.name === r.name)
+        if (f) r.points = f.points
+      }
+    }, 80)
+  }
 
   state.regionInput = createRegionInput({
     store: state.store,
@@ -292,8 +325,7 @@ function bootRegions() {
   startFaceRegionTracking(names)
 }
 
-/** 通用「按住拖动 = 搬窗口」绑定 */
-function dragWindow(el, { canStart, ignore } = {}) {
+/** 通用「按住拖动 = 搬窗口」绑定 */function dragWindow(el, { canStart, ignore } = {}) {
   let dragging = false
   let lastX = 0
   let lastY = 0
@@ -302,6 +334,7 @@ function dragWindow(el, { canStart, ignore } = {}) {
     if (ignore?.(e)) return
     if (canStart && !canStart(e)) return
     dragging = true
+    state.windowDragging = true
     lastX = e.screenX
     lastY = e.screenY
     el.classList.add('dragging')
@@ -318,6 +351,7 @@ function dragWindow(el, { canStart, ignore } = {}) {
   })
   const end = (e) => {
     dragging = false
+    state.windowDragging = false
     el.classList.remove('dragging')
     try { el.releasePointerCapture(e.pointerId) } catch {}
   }
@@ -334,11 +368,18 @@ const MASK_SCALE = 4
 // 掩码几乎全空 = 没渲染出来，这种情况下永远保持可点，别把窗口弄成点不动的死窗
 const MASK_MIN_COVERAGE = 0.004
 
+const MASK_TTL = 700
 function refreshMask(force = false) {
   const now = performance.now()
-  if (!force && state.mask && now - state.maskAt < 700) return state.mask
-  const m = state.stage?.alphaMask?.(MASK_SCALE)
-  if (m) { state.mask = m; state.maskAt = now }
+  if (!force) {
+    if (state.mask && now - state.maskAt < MASK_TTL) return state.mask
+    // 不在这里重画：挂个待办，等这一帧画完之后直接读回来（见 bindPassThrough 里的 afterRender）。
+    // 事件回调里插一次渲染会打乱帧节奏，窗口正在拖动时尤其明显（虚影/闪烁）。
+    state.maskPending = true
+    return state.mask
+  }
+  const m = perf.time('mask', () => state.stage?.alphaMask?.(MASK_SCALE, (k, ms) => perf.mark(`m.${k}`, ms)))
+  if (m) { state.mask = m; state.maskAt = now; state.maskPending = false }
   return state.mask
 }
 
@@ -381,7 +422,7 @@ function bindPassThrough() {
   window.addEventListener('pointerup', up, true)
   window.addEventListener('pointercancel', up, true)
   window.addEventListener('blur', up)
-  const apply = () => {
+  const applyNow = () => {
     queued = false
     if (!pending || !state.settings) return
     // 判据三条：
@@ -399,6 +440,7 @@ function bindPassThrough() {
     state.ignoring = want
     shell.setPassThrough(want)
   }
+  const apply = () => perf.time('pass', applyNow)
   // 勾选/取消穿透后立刻按当前指针重算，不必等鼠标晃一下
   state.recomputePass = () => { if (pending) apply() }
   window.addEventListener('pointermove', (e) => {
@@ -410,6 +452,14 @@ function bindPassThrough() {
   })
   window.addEventListener('resize', () => refreshMask(true))
   refreshMask(true)
+  // 掩码读回挂在「每帧画完」之后：只读像素，不额外渲染。
+  // 拖动窗口期间先攒着（轮廓没变，读了也没人用），拖动结束自然补上。
+  state.stage?.afterRender?.(() => {
+    if (!state.maskPending || state.windowDragging) return
+    state.maskPending = false
+    const m = perf.time('mask', () => state.stage.captureMask?.(MASK_SCALE, (k, ms) => perf.mark(`m.${k}`, ms)))
+    if (m) { state.mask = m; state.maskAt = performance.now() }
+  })
   // 验证钩子（和 harness 里的 __reaction 一样，只为无头检查）
   window.__layout = () => ({
     win: [window.innerWidth, window.innerHeight],
@@ -686,7 +736,7 @@ function bindMiddleDrag(stage) {
       o: { offsetX: v.offsetX, offsetY: v.offsetY },
     }
     // 窗口模式交给主进程：按全局光标锚点搬，指针事件坐标怎么抖都不会累积偏移
-    if (!panelOpen) shell.dragBegin()
+    if (!panelOpen) { state.windowDragging = true; shell.dragBegin() }
     try { stage.setPointerCapture(e.pointerId) } catch {}
   })
   stage.addEventListener('pointermove', (e) => {
@@ -713,6 +763,7 @@ function bindMiddleDrag(stage) {
       shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
       refreshMask(true)
     } else {
+      state.windowDragging = false
       shell.dragEnd()
     }
   }

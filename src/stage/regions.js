@@ -179,30 +179,16 @@ const SKIP_KEYS = ['组', '文件夹', '图层', '画布', '.psd', '.png']
 export function faceRegions({ core, internalModel, displayNames, canvas }) {
   const W = canvas?.width || 3749
   const H = canvas?.height || 7697
-  const n = core.getDrawableCount()
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (let i = 0; i < n; i++) {
-    let parent = -1
-    try { parent = core.getDrawableParentPartIndex(i) } catch { parent = -1 }
-    if (parent < 0) continue
-    const name = displayNames?.get?.(parent) || ''
-    if (!name || !/^脸$|^脸底$/.test(name)) continue
-    if (!(core.getDrawableOpacity(i) > 0.05)) continue
-    let vtx
-    try { vtx = internalModel.getDrawableVertices(i) } catch { continue }
-    if (!vtx || vtx.length < 6) continue
-    for (let t = 0; t < vtx.length; t += 2) {
-      const x = vtx[t], y = vtx[t + 1]
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue
-      if (x < -W || x > W * 2 || y < -H || y > H * 2) continue
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
-    }
-  }
-  if (!Number.isFinite(minX)) return []
+  const indices = faceDrawableIndices(core, displayNames)
+  const b = faceBounds(indices, { core, internalModel, W, H })
+  if (!b) return []
+  const { minX, minY, maxX, maxY } = b
 
+  return zonePoints(b)
+}
+
+/** 包围盒 → 左右两个下半脸椭圆（原几何，抽出来给缓存读取器复用） */
+function zonePoints({ minX, minY, maxX, maxY }) {
   const top = minY + (maxY - minY) * 0.46 // 眼睛以上归头部热区
   const cx = (minX + maxX) / 2
   const cy = (top + maxY) / 2
@@ -223,6 +209,82 @@ export function faceRegions({ core, internalModel, displayNames, canvas }) {
     { name: '左脸', z: 8, points: half(Math.PI / 2, (Math.PI * 3) / 2) },
     { name: '右脸', z: 8, points: half(-Math.PI / 2, Math.PI / 2) },
   ]
+}
+
+/**
+ * 「脸 / 脸底」部件下的 drawable 索引表。
+ *
+ * 这里是曾经的主线程灾难现场：原实现每次采样都遍历全部 715 个 drawable，
+ * 对每个都调一次 displayNames.get() —— 而那个 get 是 148 个部件的线性查找，
+ * 于是单次采样 ~99ms，按 120ms 周期重算时每秒吃掉 0.8 秒（实测 fps 26.9）。
+ * 映射本身是静态的，所以部件判定结果按部件索引缓存，只对真正相关的几个 drawable 取顶点。
+ */
+function faceDrawableIndices(core, displayNames) {
+  const n = core.getDrawableCount()
+  const byParent = new Map()
+  const out = []
+  for (let i = 0; i < n; i++) {
+    let parent = -1
+    try { parent = core.getDrawableParentPartIndex(i) } catch { parent = -1 }
+    if (parent < 0) continue
+    let hit = byParent.get(parent)
+    if (hit === undefined) {
+      const name = displayNames?.get?.(parent) || ''
+      hit = /^脸$|^脸底$/.test(name)
+      byParent.set(parent, hit)
+    }
+    if (hit) out.push(i)
+  }
+  return out
+}
+
+/** 给定 drawable 子集，算当前帧的包围盒（透视变形后跟着走） */
+function faceBounds(indices, { core, internalModel, W, H }) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (let k = 0; k < indices.length; k++) {
+    const i = indices[k]
+    if (!(core.getDrawableOpacity(i) > 0.05)) continue
+    let vtx
+    try { vtx = internalModel.getDrawableVertices(i) } catch { continue }
+    if (!vtx || vtx.length < 6) continue
+    for (let t = 0; t < vtx.length; t += 2) {
+      const x = vtx[t], y = vtx[t + 1]
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+      if (x < -W || x > W * 2 || y < -H || y > H * 2) continue
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  if (!Number.isFinite(minX)) return null
+  return { minX, minY, maxX, maxY }
+}
+
+/**
+ * 脸部热区读取器：每帧级的反复采样走这里（索引表缓存，单次 ~1ms 量级）。
+ * drawable 数量或部件数量变化时自动重扫一次（换装/换模型时兜底）。
+ */
+export function createFaceZoneReader({ core, internalModel, displayNames, canvas }) {
+  const W = canvas?.width || 3749
+  const H = canvas?.height || 7697
+  let indices = null
+  let sig = ''
+  return {
+    read() {
+      const s = `${core.getDrawableCount()}/${core.getPartCount()}`
+      if (!indices || s !== sig) {
+        indices = faceDrawableIndices(core, displayNames)
+        sig = s
+      }
+      const b = faceBounds(indices, { core, internalModel, W, H })
+      return b ? zonePoints(b) : []
+    },
+    /** 命中的 drawable 数量，探针用来确认映射正确 */
+    count() {
+      return indices ? indices.length : -1
+    },
+  }
 }
 
 export function seedRegions({ core, internalModel, displayNames, canvas }) {

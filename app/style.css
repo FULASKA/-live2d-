@@ -89,3 +89,14 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 }
 #panel .chips label:has(input:checked) { border-color: rgba(120, 180, 255, 0.75); color: #cfe0ff; opacity: 1; }
 #panel .chips input { margin: 0; }
+
+/* 性能浮层（F3）：常驻统计的可视化出口，不参与点击 */
+#perf {
+  position: fixed; left: 8px; top: 8px; z-index: 9999;
+  padding: 6px 8px; border-radius: 8px;
+  background: rgba(8, 12, 20, 0.82); color: #cfe0ff;
+  font: 11px/1.5 ui-monospace, Consolas, monospace;
+  pointer-events: none; white-space: nowrap;
+}
+#perf b { color: #8fd0ff; }
+#perf span { display: block; color: #9fb6d6; }
