@@ -77,7 +77,8 @@ export function createPetSway({ param, options = {} } = {}) {
       return
     }
     const amp = cfg.maxAngle * cfg.gain
-    const z = clamp(-cx * amp, -cfg.maxAngle, cfg.maxAngle)
+    // 实测方向反了：手往右 → 头也该往右，所以直接取正号（AngleZ 正 = 往左歪）
+    const z = clamp(cx * amp, -cfg.maxAngle, cfg.maxAngle)
     const y = clamp(-cy * amp, -cfg.maxAngle, cfg.maxAngle)
     last = { z: +z.toFixed(2), y: +y.toFixed(2) }
     add('ParamAngleZ', z)

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('shell', {
   resizeBegin: (edge) => ipcRenderer.send('win:resize-begin', edge),
   resizeMove: (dx, dy) => ipcRenderer.send('win:resize-move', { dx, dy }),
   resizeEnd: () => ipcRenderer.send('win:resize-end'),
+  dragBegin: () => ipcRenderer.send('win:drag-begin'),
+  dragEnd: () => ipcRenderer.send('win:drag-end'),
   panel: (opts) => ipcRenderer.send('win:panel', opts),
   center: () => ipcRenderer.send('win:center'),
   quit: () => ipcRenderer.send('shell:quit'),

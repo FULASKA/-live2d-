@@ -4,7 +4,7 @@ import { createStage } from '../src/stage/engine.js'
 import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
-import { createRegionStore, createRegionInput, seedRegions, faceRegion } from '../src/stage/regions.js'
+import { createRegionStore, createRegionInput, seedRegions, faceRegions } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
@@ -21,6 +21,8 @@ const shell = window.shell || {
   resizeBegin: () => {},
   resizeMove: () => {},
   resizeEnd: () => {},
+  dragBegin: () => {},
+  dragEnd: () => {},
   panel: () => {},
   center: () => {},
   quit: () => {},
@@ -200,21 +202,21 @@ function bootRegions() {
     state.store.save(key)
   }
 
-  // 脸部热区（捏脸用）：缺失或版本旧就重建；v2 = 只取眼睛以下（眼睛往上归头部）
-  const FACE_V = 2
-  const faceOld = state.store.all.find((r) => r.name === '脸')
-  if (!faceOld || faceOld.v !== FACE_V) {
-    if (faceOld) state.store.remove(faceOld.id)
-    const fr = faceRegion({
+  // 脸部热区（捏脸用）：左右各一个，眼睛以上仍归头部；老档案（单个「脸」）自动迁移
+  const FACE_V = 3
+  const old = state.store.all.filter((r) => r.name === '脸' || r.name === '左脸' || r.name === '右脸')
+  const needFace = old.length !== 2 || old.some((r) => r.v !== FACE_V)
+  if (needFace) {
+    for (const r of old) state.store.remove(r.id)
+    for (const fr of faceRegions({
       core: state.stage.core,
       internalModel: state.stage.model.internalModel,
       displayNames: names,
       canvas: state.stage.modelSize(),
-    })
-    if (fr) {
+    })) {
       state.store.add({ ...fr, v: FACE_V, reaction: {} })
-      state.store.save(key)
     }
+    state.store.save(key)
   }
 
   state.regionInput = createRegionInput({
@@ -242,10 +244,17 @@ function bootRegions() {
         }
       }
       // 捏脸：按住脸拖 → 鼓脸
-      if (name === '脸') {
-        if (ev.type === 'down') { state.facePinch?.grab(); pinchExpressions(true) }
-        else if (ev.type === 'dragMove') state.facePinch?.move(ev.dx || 0, ev.dy || 0)
-        else if (ev.type === 'up') { state.facePinch?.release(); pinchExpressions(false) }
+      // 捏脸：左右各一半热区，按住哪边捏哪边（方向不再参与判定）
+      if (name === '左脸' || name === '右脸') {
+        if (ev.type === 'down') {
+          state.facePinch?.grab(name === '右脸' ? 'R' : 'L')
+          pinchExpressions(true)
+        } else if (ev.type === 'dragMove') {
+          state.facePinch?.move(ev.dx || 0, ev.dy || 0)
+        } else if (ev.type === 'up') {
+          state.facePinch?.release()
+          pinchExpressions(false)
+        }
       }
       // 手在哪的偏摆已废弃：现在由 pointermove 的位移驱动（见上方 petArmed）
     },
@@ -413,7 +422,15 @@ function bindPassThrough() {
         values: keys.map((k) => [k, state.stage?.param.get(k), state.stage?.param.info(k)?.min, state.stage?.param.info(k)?.max]),
       }
     },
-    tryLean: () => triggerLean(),
+    tryLean: () => toggleLean(),
+    regionAt: (x, y) => regionAtClient(x, y)?.name ?? null,
+    regionCenter: (name) => {
+      const r = state.store?.all?.find((x) => x.name === name)
+      if (!r || !r.points?.length) return null
+      const mx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length
+      const my = r.points.reduce((s, p) => s + p[1], 0) / r.points.length
+      return state.viewport.modelToScreen(mx, my)
+    },
     regionDebug: (x, y) => {
       const p = state.viewport.clientToModel(x, y)
       const rows = (state.store?.all || []).map((r) => {
@@ -617,25 +634,23 @@ function bindMiddleDrag(stage) {
       y: e.screenY,
       o: { offsetX: v.offsetX, offsetY: v.offsetY },
     }
+    // 窗口模式交给主进程：按全局光标锚点搬，指针事件坐标怎么抖都不会累积偏移
+    if (!panelOpen) shell.dragBegin()
     try { stage.setPointerCapture(e.pointerId) } catch {}
   })
   stage.addEventListener('pointermove', (e) => {
     if (!st) return
     const dx = e.screenX - st.x
     const dy = e.screenY - st.y
-    if (st.mode === 'window') {
-      if (!dx && !dy) return
-      // 单次位移夹一下：窗口跟着动时若坐标源异常，别让窗口一帧飞出屏幕
-      const stepX = Math.max(-80, Math.min(80, dx))
-      const stepY = Math.max(-80, Math.min(80, dy))
-      shell.moveBy(stepX, stepY)
-      st.x = e.screenX
-      st.y = e.screenY
-      return
-    }
+    // 窗口模式：主进程按光标锚点搬，这里不再算增量（避免累积漂移）
+    if (st.mode === 'window') return
     const w = Math.max(1, window.innerWidth)
     const h = Math.max(1, window.innerHeight)
-    state.viewport.set({ offsetX: st.o.offsetX + (2 * dx) / w, offsetY: st.o.offsetY + (2 * dy) / h })
+    const clampOff = (v) => Math.max(-0.9, Math.min(0.9, v))
+    state.viewport.set({
+      offsetX: clampOff(st.o.offsetX + (2 * dx) / w),
+      offsetY: clampOff(st.o.offsetY + (2 * dy) / h),
+    })
   })
   const end = (e) => {
     if (!st) return
@@ -646,6 +661,8 @@ function bindMiddleDrag(stage) {
       const v = state.viewport.view
       shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
       refreshMask(true)
+    } else {
+      shell.dragEnd()
     }
   }
   stage.addEventListener('pointerup', end)
@@ -663,14 +680,20 @@ function regionAtClient(x, y) {
   return state.store.hit(p.x, p.y)
 }
 
-/** 头部右键：前倾表情（物理输入参数，写点在 beforePhysics，由 layerStack 自动分流） */
-let leanTimer = 0
-function triggerLean() {
+/** 头部右键：前倾做成**开关**（点一次开、再点一次关），不再几秒后自己消失 */
+let leanOn = false
+function toggleLean() {
   const def = (state.caps.expressions || []).find((x) => x.name === '前倾')
   if (!def) { toast('模型没有「前倾」表情'); return }
-  state.layers.addExpression('前倾', def.params, { source: 'lean' })
-  clearTimeout(leanTimer)
-  leanTimer = setTimeout(() => state.layers.removeSource('lean'), 1100)
+  if (leanOn) {
+    state.layers.removeSource('lean')
+    leanOn = false
+    toast('前倾：关')
+  } else {
+    state.layers.addExpression('前倾', def.params, { source: 'lean' })
+    leanOn = true
+    toast('前倾：开')
+  }
 }
 
 /** 点别处关掉弹窗（面板里例外：点面板不该收弹窗） */
@@ -776,7 +799,7 @@ function bindPanel() {
     e.preventDefault()
     // 头部 / 脸部捏脸区右键 = 触发「前倾」，不弹菜单（避免和互动打架）
     const r = regionAtClient(e.clientX, e.clientY)
-    if (r && (r.name === '头' || r.name === '脸')) { triggerLean(); return }
+    if (r && (r.name === '头' || r.name === '左脸' || r.name === '右脸')) { toggleLean(); return }
     showTools()
   })
   window.addEventListener('keydown', (e) => {

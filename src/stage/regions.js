@@ -172,10 +172,11 @@ const SEED_GROUPS = {
 const SKIP_KEYS = ['组', '文件夹', '图层', '画布', '.psd', '.png']
 
 /**
- * 脸部热区：按「脸 / 脸底」部件的顶点包围盒内切椭圆。
- * 官方皮的嘟嘟脸参数就绑在这块上，捏脸拖动用它当命中区（z 高于头，按下优先给它）。
+ * 脸部热区（捏脸用）：按「脸 / 脸底」部件包围盒取**眼睛以下**的椭圆，
+ * 再从中间竖着一分为二 → 「左脸」「右脸」各一个热区（z 都高于头）。
+ * 一分为二的好处：按住哪边就捏哪边，不会因为拖拽方向判错而鼓错边。
  */
-export function faceRegion({ core, internalModel, displayNames, canvas }) {
+export function faceRegions({ core, internalModel, displayNames, canvas }) {
   const W = canvas?.width || 3749
   const H = canvas?.height || 7697
   const n = core.getDrawableCount()
@@ -200,21 +201,28 @@ export function faceRegion({ core, internalModel, displayNames, canvas }) {
       if (y > maxY) maxY = y
     }
   }
-  if (!Number.isFinite(minX)) return null
-  // 只取「眼睛以下」的下半张脸：眼睛往上归头部热区（不然捏脸会抢走整张脸）
-  const h = maxY - minY
-  const top = minY + h * 0.46
+  if (!Number.isFinite(minX)) return []
+
+  const top = minY + (maxY - minY) * 0.46 // 眼睛以上归头部热区
   const cx = (minX + maxX) / 2
   const cy = (top + maxY) / 2
-  const rx = ((maxX - minX) / 2) * 0.86
-  const ry = ((maxY - top) / 2) * 1.04
-  const points = []
-  const N = 28
-  for (let k = 0; k < N; k++) {
-    const a = (k / N) * Math.PI * 2
-    points.push([Math.round(cx + Math.cos(a) * rx), Math.round(cy + Math.sin(a) * ry)])
+  const rx = ((maxX - minX) / 2) * 0.9
+  const ry = ((maxY - top) / 2) * 1.02
+  const N = 14
+
+  const half = (from, to) => {
+    const pts = []
+    for (let k = 0; k <= N; k++) {
+      const a = from + ((to - from) * k) / N
+      pts.push([Math.round(cx + Math.cos(a) * rx), Math.round(cy + Math.sin(a) * ry)])
+    }
+    return pts
   }
-  return { name: '脸', z: 8, points, box: { minX, minY, maxX, maxY } }
+
+  return [
+    { name: '左脸', z: 8, points: half(Math.PI / 2, (Math.PI * 3) / 2) },
+    { name: '右脸', z: 8, points: half(-Math.PI / 2, Math.PI / 2) },
+  ]
 }
 
 export function seedRegions({ core, internalModel, displayNames, canvas }) {
