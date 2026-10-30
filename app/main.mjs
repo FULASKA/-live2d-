@@ -22,6 +22,7 @@ const DEFAULTS = {
   offsetY: 0,
   gaze: true,
   strength: 1,
+  petGain: 1.6,
   alwaysOnTop: true,
   clickThrough: false,
   model: process.env.STAGE_MODEL || DEFAULT_MODEL,
@@ -84,6 +85,49 @@ async function createWindow() {
   win.on('closed', () => { win = null })
 }
 
+// 拖窗口轮廓改大小：无边框窗口没法靠系统边框，渲染层的八个把手发增量，这里按边缘锚点算 bounds
+let resizeBase = null
+let panelDelta = 0 // 为设置面板临时加宽的像素（存盘时不算进去）
+function wireResize() {
+  ipcMain.on('win:resize-begin', (_e, edge) => {
+    if (!win) return
+    const [x, y] = win.getPosition()
+    const [w, h] = win.getSize()
+    resizeBase = { edge: String(edge || 'se'), x, y, w, h }
+  })
+  ipcMain.on('win:resize-move', (_e, { dx = 0, dy = 0 } = {}) => {
+    if (!win || !resizeBase) return
+    const MIN_W = 220
+    const MIN_H = 220
+    const b = resizeBase
+    let { x, y, w, h } = b
+    if (b.edge.includes('e')) w = Math.max(MIN_W, Math.round(b.w + dx))
+    if (b.edge.includes('s')) h = Math.max(MIN_H, Math.round(b.h + dy))
+    if (b.edge.includes('w')) { w = Math.max(MIN_W, Math.round(b.w - dx)); x = b.x + (b.w - w) }
+    if (b.edge.includes('n')) { h = Math.max(MIN_H, Math.round(b.h - dy)); y = b.y + (b.h - h) }
+    win.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h })
+    settings.width = w
+    settings.height = h
+  })
+  ipcMain.on('win:resize-end', () => {
+    resizeBase = null
+    // 存的是「收起面板时的宽度」：面板宽度是临时的，不该跟着进配置文件
+    if (win && panelDelta) settings.width = Math.max(220, win.getContentSize()[0] - panelDelta)
+    saveSettings()
+  })
+
+  // 面板展开/收起：按增量临时改宽度，不写 settings（下次启动仍是紧凑窗）
+  ipcMain.on('win:panel', (_e, { dx = 0 } = {}) => {
+    if (!win || !dx) return
+    const [w, h] = win.getContentSize()
+    const { workArea } = screen.getPrimaryDisplay()
+    const maxW = Math.max(220, workArea.width - 8)
+    const next = Math.max(220, Math.min(maxW, Math.round(w + dx)))
+    win.setContentSize(next, h)
+    panelDelta += next - w
+  })
+}
+
 // ---------- IPC ----------
 function wireIpc() {
   ipcMain.handle('shell:get', () => ({ ...settings, token, port: srv?.port || null }))
@@ -119,12 +163,34 @@ function wireIpc() {
   ipcMain.on('shell:harness', () => shell.openExternal(`${srv.url}/harness/`))
 }
 
+// 全局光标 → 渲染层。跟随要覆盖整个桌面，所以不能只靠窗口内的 mousemove；
+// 33ms 轮询 + 变化才发，空闲时零开销。
+let cursorTimer = null
+function startCursorFeed() {
+  if (cursorTimer) return
+  let last = null
+  cursorTimer = setInterval(() => {
+    if (!win || win.isDestroyed()) return
+    const p = screen.getCursorScreenPoint()
+    if (last && p.x === last.x && p.y === last.y) return
+    last = p
+    const [wx, wy] = win.getPosition()
+    win.webContents.send('cursor:pos', { x: p.x - wx, y: p.y - wy })
+  }, 33)
+}
+function stopCursorFeed() {
+  if (cursorTimer) clearInterval(cursorTimer)
+  cursorTimer = null
+}
+
 // ---------- 生命周期 ----------
 app.whenReady().then(async () => {
   await loadSettings()
   srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)
   wireIpc()
+  wireResize()
+  startCursorFeed()
   await createWindow()
 
   // 穿透态找回 / 退出：全局快捷键，即使窗口在忽略鼠标也能用
@@ -140,6 +206,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
+  stopCursorFeed()
   globalShortcut.unregisterAll()
   srv?.close?.()
   app.quit()

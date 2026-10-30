@@ -6,9 +6,15 @@ contextBridge.exposeInMainWorld('shell', {
   set: (patch) => ipcRenderer.invoke('shell:set', patch),
   moveBy: (dx, dy) => ipcRenderer.send('win:move', { dx, dy }),
   setPassThrough: (v) => ipcRenderer.send('win:pass-through', v),
+  resizeBegin: (edge) => ipcRenderer.send('win:resize-begin', edge),
+  resizeMove: (dx, dy) => ipcRenderer.send('win:resize-move', { dx, dy }),
+  resizeEnd: () => ipcRenderer.send('win:resize-end'),
+  panel: (opts) => ipcRenderer.send('win:panel', opts),
   center: () => ipcRenderer.send('win:center'),
   quit: () => ipcRenderer.send('shell:quit'),
   devtools: () => ipcRenderer.send('shell:devtools'),
   openHarness: () => ipcRenderer.send('shell:harness'),
   onClickThrough: (fn) => ipcRenderer.on('shell:click-through', (_e, v) => fn(v)),
+  // 全局光标位置（窗口外也有），跟随要覆盖整个桌面
+  onCursor: (fn) => ipcRenderer.on('cursor:pos', (_e, p) => fn(p)),
 })

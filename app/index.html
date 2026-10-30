@@ -16,6 +16,16 @@
 <body>
   <div id="stage"></div>
 
+  <!-- 窗口轮廓拖拽：无边框窗口自己画的八个把手（透明处也能抓） -->
+  <div class="rz rz-n" data-edge="n"></div>
+  <div class="rz rz-s" data-edge="s"></div>
+  <div class="rz rz-w" data-edge="w"></div>
+  <div class="rz rz-e" data-edge="e"></div>
+  <div class="rz rz-nw" data-edge="nw"></div>
+  <div class="rz rz-ne" data-edge="ne"></div>
+  <div class="rz rz-sw" data-edge="sw"></div>
+  <div class="rz rz-se" data-edge="se"></div>
+
   <div id="tools" class="hidden">
     <button class="tool" id="tool-move" title="按住拖动窗口">✥</button>
     <button class="tool" id="tool-settings" title="设置">⚙</button>
@@ -30,12 +40,8 @@
 
     <section>
       <h3>窗口尺寸 A</h3>
-      <div class="row">
-        <input type="number" id="win-w" min="200" max="2400" step="10"> ×
-        <input type="number" id="win-h" min="200" max="1600" step="10">
-        <button id="win-apply">应用</button>
-      </div>
-      <div class="row"><button id="win-center">窗口居中</button></div>
+      <div class="row"><span id="size-readout" class="readout">520 × 760</span><button id="win-center">居中</button></div>
+      <div class="hint">拖窗口的<b>边或角</b>直接改大小；A 变、角色按比例跟着缩放，模型大小 B 再单独调</div>
     </section>
 
     <section>
@@ -47,13 +53,26 @@
       <h3>跟随</h3>
       <div class="row"><label><input type="checkbox" id="gaze"> 眼 / 头 / 身体跟随鼠标</label></div>
       <div class="row"><input type="range" id="strength" min="0" max="1" step="0.05"></div>
+      <div class="row"><label>抚摸晃动增益</label><input type="range" id="pet-gain" min="0" max="3" step="0.1"></div>
+    </section>
+
+    <section>
+      <h3>分区反应（点击 / 滑动）</h3>
+      <div class="row">
+        <select id="rx-region"></select>
+        <select id="rx-kind"><option value="tap">点击</option><option value="pet">滑动</option></select>
+        <select id="rx-mode"><option value="expr">临时</option><option value="toggle">切换</option></select>
+      </div>
+      <div class="row chips" id="rx-exprs"></div>
+      <div class="row"><button id="rx-reset">恢复默认</button></div>
+      <div class="hint">勾上的表情 = 这一组反应。「临时」几秒后自己退场；「切换」是点一次开、再点关（换装/穿脱这类长期状态）</div>
     </section>
 
     <section>
       <h3>窗口行为</h3>
       <div class="row"><label><input type="checkbox" id="top"> 置顶</label></div>
       <div class="row"><label><input type="checkbox" id="click-through"> 穿透模式（鼠标穿过）</label></div>
-      <div class="hint">穿透时按 <b>Ctrl+Alt+L</b> 找回；<b>Ctrl+Alt+Q</b> 退出</div>
+      <div class="hint">穿透时角色区不可点，<b>面板与「恢复鼠标」浮标仍可点</b>；也可按 <b>Ctrl+Alt+L</b> 找回，<b>Ctrl+Alt+Q</b> 退出</div>
     </section>
 
     <section class="footer">
@@ -61,7 +80,7 @@
       <button id="quit">退出</button>
     </section>
 
-    <div class="hint">拖动空白处移动窗口 · 右键打开/关闭设置 · 点/摸角色的分区有反应</div>
+    <div class="hint">拖窗口边缘改大小 · 拖角色移动窗口 · 右键打开/关闭设置</div>
   </div>
 
   <script src="./renderer.js" type="module"></script>
