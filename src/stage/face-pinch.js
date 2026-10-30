@@ -85,6 +85,7 @@ export function createFacePinch({ param, options = {} } = {}) {
     const wiggleAmt = Math.sin(phase) * m * cfg.wiggle
     if (has('CheeckPuff')) writeFrac('CheeckPuff', m * cfg.puff)
     if (has('CheeckPuff2')) writeFrac('CheeckPuff2', m * cfg.puff * 0.6)
+    // 方向：往左拉鼓左脸（cdi3 里 CheeckPuffL 的名字是「> 鼓脸」、R 是「< 鼓脸」，注意是反的）
     if (has('CheeckPuffL')) writeFrac('CheeckPuffL', Math.max(0, -cur.x) * cfg.side)
     if (has('CheeckPuffR')) writeFrac('CheeckPuffR', Math.max(0, cur.x) * cfg.side)
     if (has('CheeksWiggleX')) writeAbs('CheeksWiggleX', wiggleAmt)

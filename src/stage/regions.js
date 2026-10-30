@@ -201,10 +201,13 @@ export function faceRegion({ core, internalModel, displayNames, canvas }) {
     }
   }
   if (!Number.isFinite(minX)) return null
+  // 只取「眼睛以下」的下半张脸：眼睛往上归头部热区（不然捏脸会抢走整张脸）
+  const h = maxY - minY
+  const top = minY + h * 0.46
   const cx = (minX + maxX) / 2
-  const cy = (minY + maxY) / 2
-  const rx = ((maxX - minX) / 2) * 0.92
-  const ry = ((maxY - minY) / 2) * 0.88
+  const cy = (top + maxY) / 2
+  const rx = ((maxX - minX) / 2) * 0.86
+  const ry = ((maxY - top) / 2) * 1.04
   const points = []
   const N = 28
   for (let k = 0; k < N; k++) {

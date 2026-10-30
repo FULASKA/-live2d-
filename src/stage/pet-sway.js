@@ -72,8 +72,8 @@ export function createPetSway({ param, options = {} } = {}) {
 
     const g = amp * cfg.gain
     const sway = Math.sin(phase) * g
-    // 追踪手：晃动叠一层朝指针方向的偏摆，手感上像是被手带着晃
-    const leanX = pointer.x * 5.5 * g
+    // 追踪手：晃动叠一层朝指针方向的偏摆（AngleZ 为正 = 往左歪，所以取负号才「朝手」）
+    const leanX = -pointer.x * 5.5 * g
     const leanY = -pointer.y * 3.6 * g
     last = {
       z: sway * cfg.angleAmp + leanX,

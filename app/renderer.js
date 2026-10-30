@@ -154,6 +154,17 @@ async function bootStage() {
   shell.onCursor?.((p) => lookFromClient(p.x, p.y))
 }
 
+/** 捏脸时的表情反馈：＞＜ + 脸红（独立 source，松手整组撤掉，不干扰分区反应） */
+const PINCH_EXPRS = ['＞＜', '脸红']
+function pinchExpressions(on) {
+  if (!state.layers) return
+  if (!on) { state.layers.removeSource('pinch'); return }
+  for (const n of PINCH_EXPRS) {
+    const def = (state.caps.expressions || []).find((e) => e.name === n)
+    if (def) state.layers.addExpression(n, def.params, { source: 'pinch' })
+  }
+}
+
 function bootRegions() {
   const key = state.caps.model.name
   state.store = createRegionStore([])
@@ -177,8 +188,11 @@ function bootRegions() {
     state.store.save(key)
   }
 
-  // 脸部热区（捏脸用）：老档案里没有就按「脸」部件自动补一个，z 高于头
-  if (!state.store.all.some((r) => r.name === '脸')) {
+  // 脸部热区（捏脸用）：缺失或版本旧就重建；v2 = 只取眼睛以下（眼睛往上归头部）
+  const FACE_V = 2
+  const faceOld = state.store.all.find((r) => r.name === '脸')
+  if (!faceOld || faceOld.v !== FACE_V) {
+    if (faceOld) state.store.remove(faceOld.id)
     const fr = faceRegion({
       core: state.stage.core,
       internalModel: state.stage.model.internalModel,
@@ -186,7 +200,7 @@ function bootRegions() {
       canvas: state.stage.modelSize(),
     })
     if (fr) {
-      state.store.add({ ...fr, reaction: {} })
+      state.store.add({ ...fr, v: FACE_V, reaction: {} })
       state.store.save(key)
     }
   }
@@ -210,9 +224,9 @@ function bootRegions() {
       }
       // 捏脸：按住脸拖 → 鼓脸
       if (name === '脸') {
-        if (ev.type === 'down') state.facePinch?.grab()
+        if (ev.type === 'down') { state.facePinch?.grab(); pinchExpressions(true) }
         else if (ev.type === 'dragMove') state.facePinch?.move(ev.dx || 0, ev.dy || 0)
-        else if (ev.type === 'up') state.facePinch?.release()
+        else if (ev.type === 'up') { state.facePinch?.release(); pinchExpressions(false) }
       }
       // 手在哪，晃动就往哪偏（模型画布坐标 → 归一化 -1..1）
       if (ev.point && (ev.type === 'move' || ev.type === 'pet' || ev.type === 'down')) {

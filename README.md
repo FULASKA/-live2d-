@@ -96,9 +96,10 @@ npm run pack     # 打便携版：dist/Live2DStage-win32-x64/Live2DStage.exe（�
 - **分区反应可改**：面板里选「区域 × 点击/滑动」勾表情，存进热区并持久化；「切换」用于换装这类长期状态
 - **抚摸晃动增益**：滑动时头持续摆动（跟手，停手才淡出），并叠一层朝手指方向的偏摆（真的在追手），
   面板里有滑杆调幅度
-- **捏脸（试做）**：按住「脸」热区拖动 → 写 `CheeckPuff / CheeckPuffL / CheeckPuffR / CheeckPuff2 / CheeksWiggleX`，
-  拉扯量决定鼓起程度、左右决定单边；松手平滑回零。注：本 moc 里这几个参数的视觉幅度很弱，
-  实际观感待定（见 docs 记录）
+- **捏脸**：按住「脸」热区拖动 → 表情 `＞＜` + `脸红`（看得见的反馈），同时按方向和力度写
+  `CheeckPuff / CheeckPuffL / CheeckPuffR / CheeckPuff2 / CheeksWiggleX`；松手平滑回零。
+  热区只取**眼睛以下**的脸颊（眼睛往上归头部热区）；本 moc 的鼓脸是变形器驱动、幅度很弱，
+  PSD 里也没有「鼓脸」图层（只有脸红 / 脸黑），所以主要靠表情组合出效果
 - 按在角色分区上 = 互动，不会误拖窗口
 - `Ctrl+Alt+L` 切换穿透（穿透时角色不可点，面板和「恢复鼠标」浮标仍可点）；`Ctrl+Alt+Q` 退出
 - 设置保存在 `%APPDATA%/live2d-stage/settings.json`（A/B/跟随/增益/置顶），重启保留
