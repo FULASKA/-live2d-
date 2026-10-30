@@ -337,13 +337,36 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
       const dy = p.y - pressed.last.y
       const dist = Math.hypot(dx, dy)
       pressed.moved += dist
+      pressed.stepDist += dist
       pressed.last = p
-      if (pressed.moved > cfg.petStep && pressed.regionId && region && region.id === pressed.regionId) {
+
+      // 起手在热区外、滑进来也算数：否则「手不会每次都精准落在热区里」会让触发率很低。
+      // 采纳规则：
+      //   a) 起点在区外 → 第一次真的按在角色身上（不透明）时采纳；
+      //   b) 已采纳后，只允许**更高 z** 的热区接管（尾巴 z=1 是兜底，扫过尾巴边缘再摸到腰/腿，
+      //      应该算腰/腿的）；反过来在头/胸里滑动不会被低层热区抢走。
+      const target = pressed.region
+      const canAdopt = !target || (pressed.entered && region && region.z > target.z)
+      if (region && canAdopt && region !== target) {
+        const visible = target ? true : (!isOpaque || isOpaque(p))
+        if (visible) {
+          pressed.region = region
+          pressed.regionId = region.id
+          pressed.entered = true
+          pressed.stepDist = 0
+          // 换目标 = 新的一串抚摸，步数从头记（上层只在 step===1 时触发*反应*，
+          // 否则扫过尾巴那一格就把序号用掉了，真正摸到腰时不会触发）
+          pressed.petSteps = 0
+        }
+      }
+      if (pressed.regionId && region && region.id === pressed.regionId && pressed.stepDist >= cfg.petStep) {
+        pressed.stepDist = 0
         pressed.petSteps += 1
         emit('pet', { region, point: p, step: pressed.petSteps })
       }
-      // 拖动判定：位移超过阈值就认为在拖（先到先得，之后按拖动持续上报）
-      if (pressed.moved > cfg.dragMinMove && !pressed.dragging) {
+
+      // 拖动判定：位移超过阈值就认为在拖（先到先得）；从区外滑进来的不算拖区域
+      if (pressed.moved > cfg.dragMinMove && !pressed.dragging && !pressed.entered) {
         pressed.dragging = true
         emit('dragStart', { region: pressed.region, point: p })
       }
@@ -361,7 +384,7 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
 
   const onPointerDown = (e) => {
     const { p, region } = hitAt(e.clientX, e.clientY, { gate: true })
-    pressed = { region, regionId: region?.id, start: p, last: p, moved: 0, t0: performance.now(), petSteps: 0, dragging: false, pointerId: e.pointerId }
+    pressed = { region, regionId: region?.id, start: p, last: p, moved: 0, stepDist: 0, entered: false, t0: performance.now(), petSteps: 0, dragging: false, pointerId: e.pointerId }
     // 合成事件（测试/无头）里 pointerId 不是活跃指针，capture 会抛 —— 拦掉，别让后续逻辑断链
     try { canvas?.setPointerCapture?.(e.pointerId) } catch {}
     emit('down', { region, point: p })
@@ -371,10 +394,11 @@ export function createRegionInput({ store, viewport, onEvent, canvas, isOpaque }
     if (!pressed) return
     const dt = performance.now() - pressed.t0
     // 连续抚摸过多次 → 即使位移够大也算抚摸（人在顺毛，不是要把角色拖走）
-    const kind = pressed.petSteps >= 3
-      ? 'pet'
-      : pressed.dragging || pressed.moved > cfg.dragMinMove
-        ? 'drag'
+    // 从区外滑进来的（entered）同样归为抚摸：没有「抓取起点」，谈不上拖区域
+    const kind = pressed.dragging
+      ? 'drag'
+      : pressed.petSteps >= 3 || pressed.entered
+        ? 'pet'
         : pressed.moved <= cfg.tapMaxMove && dt <= cfg.tapMaxMs
           ? 'tap'
           : 'pet'
