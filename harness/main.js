@@ -107,6 +107,11 @@ async function bootStage() {
     const viewport = createViewport({ model: stage.model, app: stage.app })
     state.viewport = viewport
     viewport.observe($('#stage'))
+    const env = $('#env')
+    if (env) {
+      const sz = stage.size()
+      env.textContent = `舞台 ${Math.round(sz.width)}×${Math.round(sz.height)} · DPR ${window.devicePixelRatio} · 画布 ${stage.modelSize().width}×${stage.modelSize().height}`
+    }
 
     stage.app.ticker.add(() => {
       state.frames = stage.clocks().frames
@@ -299,11 +304,11 @@ function onRegionEvent(ev) {
       if (r && ev.step === 1) applyReaction(r, 'pet')
       break
     case 'down':
-      if (r) {
-        // 命中诊断：alpha 是「透明穿透」那一关的判据，点不动时先看这个数
+      {
+        // 命中诊断：不管有没有命中都记一行，点不动时一眼看出卡在哪
         const sp = state.viewport.modelToScreen(ev.point.x, ev.point.y)
         const a = state.stage.sampleAlpha(sp.x, sp.y)
-        pushLog('hit', `按下 ${r.name} · alpha=${a.alpha == null ? 'null' : a.alpha}`)
+        pushLog('hit', `按下 ${r ? r.name : '背景'} · alpha=${a.alpha == null ? 'null' : a.alpha} · 舞台(${Math.round(sp.x)},${Math.round(sp.y)})`)
       }
       break
     case 'dragStart':
@@ -367,7 +372,10 @@ function clearReactionGroup(reason) {
 function applyReaction(region, kind) {
   if (!region) return
   const rx = region.reaction?.[kind] || DEFAULT_REACTIONS[region.name]?.[kind]
-  if (!rx) return
+  if (!rx) {
+    pushLog('warn', `${region.name} · ${kind} 没有配置反应（现有：${Object.keys(region.reaction || {}).join('/') || '空'}）`)
+    return
+  }
   const gid = `${region.name}:${kind}`
   const wanted = []
   if (rx.toggle) wanted.push(rx.toggle)
@@ -735,7 +743,7 @@ function pointInTri(px, py, ax, ay, bx, by, cx, cy) {
 // ---------- 面板渲染 ----------
 function renderMeta() {
   const c = state.caps
-  $('#meta').innerHTML = `${c.model.name}<br>参数 ${c.params.length} · 部件 ${c.parts.length}<br>动作 ${c.motions.length} · 表情 ${c.expressions.length}`
+  $('#meta').innerHTML = `${c.model.name}<br>参数 ${c.params.length} · 部件 ${c.parts.length}<br>动作 ${c.motions.length} · 表情 ${c.expressions.length}<br><span id="env"></span>`
   $('#n-param').textContent = c.params.length
   $('#n-motion').textContent = c.motions.length
   $('#n-exp').textContent = c.expressions.length
