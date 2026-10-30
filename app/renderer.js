@@ -4,9 +4,10 @@ import { createStage } from '../src/stage/engine.js'
 import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
-import { createRegionStore, createRegionInput, seedRegions } from '../src/stage/regions.js'
+import { createRegionStore, createRegionInput, seedRegions, faceRegion } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
+import { createFacePinch } from '../src/stage/face-pinch.js'
 
 const $ = (s) => document.querySelector(s)
 const TOGGLE_SET = new Set(['胸口衣服', '裙子切换', '脱鞋', '尾巴开关'])
@@ -112,6 +113,9 @@ async function bootStage() {
     options: { gain: Number(state.settings.petGain ?? 1.6) },
   })
 
+  // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘
+  state.facePinch = createFacePinch({ param: stage.param })
+
   let lastT = performance.now()
   stage.onBeforeUpdate(() => {
     const now = performance.now()
@@ -120,6 +124,7 @@ async function bootStage() {
     state.gaze.apply(dt)
     state.layers.apply()
     state.petSway.apply(dt)
+    state.facePinch?.apply(dt)
   })
 
   const viewport = createViewport({ model: stage.model, app: stage.app })
@@ -152,19 +157,38 @@ async function bootStage() {
 function bootRegions() {
   const key = state.caps.model.name
   state.store = createRegionStore([])
-  const loaded = state.store.load(key)
   const bands = ['头', '胸', '腰', '裙摆', '腿', '脚', '尾巴']
+  const names = {
+    get: (i) => {
+      try { return state.caps.parts.find((p) => p.id === state.stage.core.getPartId(i).getString().s)?.name || '' } catch { return '' }
+    },
+  }
+  const loaded = state.store.load(key)
   const missing = loaded ? bands.filter((n) => !state.store.all.some((r) => r.name === n)) : bands
   if (!loaded || missing.length) {
     const seeded = seedRegions({
       core: state.stage.core,
       internalModel: state.stage.model.internalModel,
-      displayNames: { get: (i) => { try { return state.caps.parts.find((p) => p.id === state.stage.core.getPartId(i).getString().s)?.name || '' } catch { return '' } } },
+      displayNames: names,
       canvas: state.stage.modelSize(),
     })
     for (const r of state.store.all.slice()) state.store.remove(r.id)
     for (const r of seeded) state.store.add({ ...r, reaction: DEFAULT_REACTIONS[r.name] || {} })
     state.store.save(key)
+  }
+
+  // 脸部热区（捏脸用）：老档案里没有就按「脸」部件自动补一个，z 高于头
+  if (!state.store.all.some((r) => r.name === '脸')) {
+    const fr = faceRegion({
+      core: state.stage.core,
+      internalModel: state.stage.model.internalModel,
+      displayNames: names,
+      canvas: state.stage.modelSize(),
+    })
+    if (fr) {
+      state.store.add({ ...fr, reaction: {} })
+      state.store.save(key)
+    }
   }
 
   state.regionInput = createRegionInput({
@@ -177,11 +201,23 @@ function bootRegions() {
       return sp.x >= -m && sp.y >= -m && sp.x <= s.width + m && sp.y <= s.height + m
     },
     onEvent: (ev) => {
-      if (ev.type === 'tap' && ev.region) state.reactions.apply(ev.region, 'tap')
-      if (ev.type === 'pet' && ev.region) {
+      const name = ev.region?.name
+      if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
+      if (ev.type === 'pet' && name) {
         // 反应只在第一步触发（否则每组会反复重建）；晃动每一步都续，才是「跟着滑动在晃」
-        if (ev.step === 1) state.reactions.apply(ev.region, 'pet')
-        state.petSway?.trigger(ev.region.name)
+        if (name !== '脸' && ev.step === 1) state.reactions.apply(ev.region, 'pet')
+        state.petSway?.trigger(name)
+      }
+      // 捏脸：按住脸拖 → 鼓脸
+      if (name === '脸') {
+        if (ev.type === 'down') state.facePinch?.grab()
+        else if (ev.type === 'dragMove') state.facePinch?.move(ev.dx || 0, ev.dy || 0)
+        else if (ev.type === 'up') state.facePinch?.release()
+      }
+      // 手在哪，晃动就往哪偏（模型画布坐标 → 归一化 -1..1）
+      if (ev.point && (ev.type === 'move' || ev.type === 'pet' || ev.type === 'down')) {
+        const c = state.stage.modelSize()
+        state.petSway?.point((ev.point.x / c.width) * 2 - 1, (ev.point.y / c.height) * 2 - 1)
       }
     },
   })
@@ -321,6 +357,25 @@ function bindPassThrough() {
     refreshMask,
     sway: (name) => state.petSway?.trigger(name),
     charRight: () => Math.round(charRightClient()),
+    face: () => state.facePinch?.state() ?? null,
+    faceCenter: () => {
+      const r = state.store?.all?.find((x) => x.name === '脸')
+      if (!r || !r.points?.length) return null
+      const cx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length
+      const cy = r.points.reduce((s, p) => s + p[1], 0) / r.points.length
+      const st = state.stage
+      const cr = st.canvas.getBoundingClientRect()
+      const sc = st.model.scale.x
+      const ms = st.modelSize()
+      return {
+        x: cr.left + st.model.position.x + (cx - ms.width / 2) * sc,
+        y: cr.top + st.model.position.y + (cy - ms.height / 2) * sc,
+      }
+    },
+    regions: () => (state.store?.all || []).map((r) => ({ name: r.name, z: r.z })),
+    zoom: (z) => state.viewport.set({ zoom: z }),
+    pinchTest: (dx, dy) => { state.facePinch.grab(); state.facePinch.move(dx, dy) },
+    pinchReset: () => state.facePinch.release(),
     mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
     state: () => ({ ignoring: state.ignoring, clickThrough: state.settings?.clickThrough, pointerDown: state.pointerDown }),
   }

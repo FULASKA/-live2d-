@@ -33,6 +33,12 @@ export function createPetSway({ param, options = {} } = {}) {
   let hold = 0       // 剩余活跃时间（ms）
   let phase = 0
   let last = { z: 0, y: 0, body: 0 }
+  // 指针相对角色中心的归一化位置：抚摸时头往手的偏，不是单纯原地晃
+  const pointer = { x: 0, y: 0 }
+  function point(nx, ny) {
+    pointer.x = clamp(nx, -1, 1)
+    pointer.y = clamp(ny, -1, 1)
+  }
 
   const add = (id, delta) => {
     if (!delta) return
@@ -66,9 +72,12 @@ export function createPetSway({ param, options = {} } = {}) {
 
     const g = amp * cfg.gain
     const sway = Math.sin(phase) * g
+    // 追踪手：晃动叠一层朝指针方向的偏摆，手感上像是被手带着晃
+    const leanX = pointer.x * 5.5 * g
+    const leanY = -pointer.y * 3.6 * g
     last = {
-      z: sway * cfg.angleAmp,
-      y: Math.cos(phase * 0.5) * g * cfg.nodAmp,
+      z: sway * cfg.angleAmp + leanX,
+      y: Math.cos(phase * 0.5) * g * cfg.nodAmp + leanY,
       body: sway * cfg.bodyAmp,
     }
     add('ParamAngleZ', last.z)
@@ -78,6 +87,7 @@ export function createPetSway({ param, options = {} } = {}) {
 
   return {
     trigger,
+    point,
     apply,
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,

@@ -171,6 +171,49 @@ const SEED_GROUPS = {
 
 const SKIP_KEYS = ['组', '文件夹', '图层', '画布', '.psd', '.png']
 
+/**
+ * 脸部热区：按「脸 / 脸底」部件的顶点包围盒内切椭圆。
+ * 官方皮的嘟嘟脸参数就绑在这块上，捏脸拖动用它当命中区（z 高于头，按下优先给它）。
+ */
+export function faceRegion({ core, internalModel, displayNames, canvas }) {
+  const W = canvas?.width || 3749
+  const H = canvas?.height || 7697
+  const n = core.getDrawableCount()
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (let i = 0; i < n; i++) {
+    let parent = -1
+    try { parent = core.getDrawableParentPartIndex(i) } catch { parent = -1 }
+    if (parent < 0) continue
+    const name = displayNames?.get?.(parent) || ''
+    if (!name || !/^脸$|^脸底$/.test(name)) continue
+    if (!(core.getDrawableOpacity(i) > 0.05)) continue
+    let vtx
+    try { vtx = internalModel.getDrawableVertices(i) } catch { continue }
+    if (!vtx || vtx.length < 6) continue
+    for (let t = 0; t < vtx.length; t += 2) {
+      const x = vtx[t], y = vtx[t + 1]
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+      if (x < -W || x > W * 2 || y < -H || y > H * 2) continue
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  if (!Number.isFinite(minX)) return null
+  const cx = (minX + maxX) / 2
+  const cy = (minY + maxY) / 2
+  const rx = ((maxX - minX) / 2) * 0.92
+  const ry = ((maxY - minY) / 2) * 0.88
+  const points = []
+  const N = 28
+  for (let k = 0; k < N; k++) {
+    const a = (k / N) * Math.PI * 2
+    points.push([Math.round(cx + Math.cos(a) * rx), Math.round(cy + Math.sin(a) * ry)])
+  }
+  return { name: '脸', z: 8, points, box: { minX, minY, maxX, maxY } }
+}
+
 export function seedRegions({ core, internalModel, displayNames, canvas }) {
   const partName = (index) => displayNames?.get?.(index) || ''
   const n = core.getDrawableCount()
