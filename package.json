@@ -3,11 +3,14 @@
   "version": "0.1.0-dev",
   "private": true,
   "type": "module",
+  "main": "app/main.mjs",
   "description": "协作工作台的角色演出层：透明窗口、双路动作控制、分区互动、关键帧动画。开发期只做接口。",
   "scripts": {
     "serve": "node scripts/serve.mjs",
     "core": "node scripts/fetch-core.mjs",
-    "shot": "node scripts/shot.mjs"
+    "shot": "node scripts/shot.mjs",
+    "app": "electron app/main.mjs",
+    "pack": "node scripts/pack.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -18,6 +21,8 @@
     "untitled-pixi-live2d-engine": "^1.4.0"
   },
   "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^33.4.11",
     "puppeteer-core": "^24.43.1"
   }
 }

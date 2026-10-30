@@ -77,18 +77,45 @@ node scripts/shot.mjs --url "…/harness/" --drag "610,300,710,330"   # 拖动 �
 node scripts/shot.mjs --url "…/harness/" --click "1188,124|300,250|340,255|345,300" --key Enter  # 画一个区域
 ```
 
+## 应用壳（Electron）
+
+透明无边框窗口，角色浮在桌面上；**窗口尺寸 A 与模型尺寸 B 分开调**（A 改窗口、B 只改模型缩放）。
+
+```bash
+npm run app      # 启动应用窗口（内置同一个静态服务，端口随机）
+npm run pack     # 打便携版：dist/Live2DStage-win32-x64/Live2DStage.exe（约 360MB）
+```
+
+- 角色铺满窗口后空白处很少，所以搬窗口靠**右键唤出的工具条**：`✥` 按住拖动、`⚙` 打开设置、`×` 收起
+- 设置面板的标题栏也能拖（`✥ 设置` 那一行）
+- 设置面板：窗口尺寸 A / 模型缩放 B / 跟随开关与强度 / 置顶 / 穿透模式
+- 按在角色分区上 = 互动，不会误拖窗口
+- `Ctrl+Alt+L` 切换穿透（穿透时鼠标会穿过窗口，用它找回）；`Ctrl+Alt+Q` 退出
+- 设置保存在 `%APPDATA%/live2d-stage/settings.json`（A/B/跟随/置顶），重启保留
+- 「验证台」按钮用默认浏览器打开 `/harness/`（调试面板还在那里）
+
+打包注意：
+
+- `tmp/electron-v33.4.11-win32-x64.zip` 是 Electron 运行时（110MB，国内可直接用 npmmirror 拉）；
+  缺失时先下载这个文件，`npm run pack` 会用它而不再联网。
+- `vendor/live2dcubismcore.min.js` 必须在（专有许可，不入库）；缺了应用启动会提示缺少 Core。
+- 默认模型路径写死在 `app/main.mjs` 的 `DEFAULT_MODEL`，也可用环境变量 `STAGE_MODEL` 覆盖。
+
 ## 结构
 
 ```
+app/                  Electron 应用壳：透明窗口 / A-B 设置面板 / 穿透与找回
+src/server/           静态服务 + 能力清单 + ActionBus（开发服务器与应用壳共用）
 docs/SPEC.md          设计决议（窗口 A/B 绑定、冲突分层、区域、档案、许可、渲染内核）
 docs/PROTOCOL.md      接口契约 v0（DSH ↔ Stage）
 src/contracts.ts      契约类型
 src/stage/engine.js   渲染内核适配层（唯一直接碰内核的文件）
 src/stage/layers.js   L2 表情叠加 / L5 受控参数 / 部件覆盖
+src/stage/reactions.js 分区反应规则（切换不叠加 / 瞬间与长期两层 / 应用壳共用）
 src/stage/gaze.js     L1 眼 → 头 → 身体三通道跟随
 src/stage/regions.js  热区几何、自动铺初稿、手势识别（点/抚摸/拖动）
 src/stage/viewport.js 窗口 A 与模型 B 的绑定、缩放位移
-scripts/serve.mjs     开发版 Stage 服务器（静态 + 模型挂载 + ActionBus 桩）
+scripts/serve.mjs     开发版服务 CLI（内部调用 src/server）
 scripts/shot.mjs      无头验证：真实时间等待 → 取样 → 截图
 harness/              验证台：能力清单 / 动作下发 / 参数受控 / 事件日志
 ```

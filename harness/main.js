@@ -6,6 +6,7 @@ import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
 import { createRegionStore, createRegionInput, seedRegions } from '../src/stage/regions.js'
+import { DEFAULT_REACTIONS, createReactions } from '../src/stage/reactions.js'
 
 const $ = (s) => document.querySelector(s)
 const TOKEN = new URLSearchParams(location.search).get('token') || 'dev-token'
@@ -25,22 +26,7 @@ const state = {
   },
 }
 
-/**
- * 默认反馈：一个区域 × 一种手势 = 一个「动作组」。
- * 规则：同一时刻只允许一个组在场（切换，不是叠加）；toggle 型（换装/脱鞋/尾巴）再点一次同组 = 收回。
- * expr 数组是有序的：后加的层覆盖同参数 —— 腰部的 ＞＜→流泪→流冷汗 必须按这个顺序，
- * 才能保住眉毛变化而不被眼睛覆盖。
- */
-const DEFAULT_REACTIONS = {
-  头: { tap: { toggle: '爱心眼' }, pet: { expr: ['＞＜', '脸红'] } },
-  胸: { tap: { toggle: '胸口衣服' }, pet: { expr: ['屑屑眼'] } },
-  腰: { tap: { expr: ['＞＜'] }, pet: { expr: ['＞＜', '流泪', '流冷汗'] } },
-  裙摆: { tap: { toggle: '裙子切换' }, pet: { expr: ['黑脸', '屑屑眼', '竖食指开'] } },
-  腿: { tap: { expr: ['加载'] }, pet: { expr: ['加载', '脸红'] } },
-  // 大笑本模型没有预设（理论上得靠面捕皮，未做），所以脚部滑动只到流泪
-  脚: { tap: { toggle: '脱鞋' }, pet: { expr: ['流泪'] } },
-  尾巴: { tap: { toggle: '尾巴开关' } },
-}
+// 分区反应规则与产品壳共用同一份：见 src/stage/reactions.js（DEFAULT_REACTIONS 由那里导出）
 
 function pushLog(kind, text) {
   state.log.unshift({ kind, text, t: new Date().toLocaleTimeString() })
@@ -81,6 +67,11 @@ async function bootStage() {
       isPhysicsInput: (id) => state.physics.inputs.has(id) && !state.physics.outputs.has(id),
     })
     stage.onBeforePhysics(() => state.layers.applyPhysics())
+    state.reactions = createReactions({
+      layers: state.layers,
+      expressionDefs: state.caps.expressions,
+      onEvent: onReactionEvent,
+    })
     const q0 = new URLSearchParams(location.search)
     state.gaze = createGaze({
       param: stage.param,
@@ -360,81 +351,25 @@ async function loadPhysicsFlow() {
   }
 }
 
-// ---------- 分区互动：动作组（切换，不叠加） ----------
-const REACTION_SOURCE = 'reaction'
-/** 换装/脱鞋/尾巴这类「开关」单独一层：长期保持，不被别的点击/滑动清掉 */
-const SWITCH_SOURCE = 'switch'
-const REACTION_TTL = 6000
-const active = { group: null, timer: 0 }
-
-/** 把当前动作组整个撤掉（表情层按 source 清，其它层不动） */
-function clearReactionGroup(reason) {
-  if (active.timer) { clearTimeout(active.timer); active.timer = 0 }
-  const removed = state.layers?.removeSource(REACTION_SOURCE) || []
-  active.group = null
-  if (removed.length) {
-    renderExprChips()
-    pushLog('expr', `− ${removed.join(' + ')}${reason ? `（${reason}）` : ''}`)
-  }
+// ---------- 分区互动：动作组（规则在 src/stage/reactions.js，产品壳共用同一份） ----------
+function applyReaction(region, kind) {
+  state.reactions?.apply(region, kind)
 }
 
-function applyReaction(region, kind) {
-  if (!region) return
-  const rx = region.reaction?.[kind] || DEFAULT_REACTIONS[region.name]?.[kind]
-  if (!rx) {
-    pushLog('warn', `${region.name} · ${kind} 没有配置反应（现有：${Object.keys(region.reaction || {}).join('/') || '空'}）`)
+/** 反应层产生的日志与面板刷新（验证台只管展示，规则不在这里） */
+function onReactionEvent(e) {
+  if (e.type === 'added') {
+    pushLog('expr', `+ ${e.name}${e.persist ? '（切换开，长期保持）' : ''}`)
+    renderExprChips()
     return
   }
-  // 切换型（换装 / 脱鞋 / 尾巴）：独立成层，**长期保持**。
-  // 别的点击、别的滑动都不会动它；只有再点同一个区域才收回去。
-  if (rx.toggle) {
-    const on = state.layers.hasExpression(rx.toggle)
-    if (on) {
-      state.layers.removeExpression(rx.toggle)
-      pushLog('expr', `− ${rx.toggle}（切换关）`)
-    } else {
-      addExpression(rx.toggle, { source: SWITCH_SOURCE })
-      pushLog('expr', `+ ${rx.toggle}（切换开，长期保持）`)
-    }
+  if (e.type === 'removed') {
+    pushLog('expr', `− ${(e.names || []).join(' + ')}${e.reason ? `（${e.reason}）` : ''}`)
     renderExprChips()
-    // 顺带收掉当前那次临时反应（它本来就是一次性的），切换态保留
-    if (active.group) clearReactionGroup('切换互动')
-    active.group = null
-    pushLog('region', `${region.name} · ${kind} → ${on ? '收回' : '打开'} ${rx.toggle}`)
     return
   }
-
-  const gid = `${region.name}:${kind}`
-  const wanted = []
-  for (const name of rx.expr || (rx.expression ? [rx.expression] : [])) wanted.push(name)
-
-  // 切组：只撤掉新组里没有的层。两边都有的（腿:点击 的「加载」→ 腿:滑动 的「加载+脸红」）
-  // 原地保留 —— 移除再重建会让表情的动画/淡入从头开始，看起来就是「被重置了一次」。
-  if (active.timer) { clearTimeout(active.timer); active.timer = 0 }
-  const keep = new Set(wanted)
-  const removed = state.layers.removeSourceExcept(REACTION_SOURCE, keep)
-  active.group = gid
-
-  const added = []
-  for (const name of wanted) {
-    if (addExpression(name, { source: REACTION_SOURCE })) added.push(name)
-  }
-  if (removed.length) {
-    renderExprChips()
-    pushLog('expr', `− ${removed.join(' + ')}（切换动作组）`)
-  }
-  const kept = wanted.filter((n) => !added.includes(n))
-
-  if (rx.motion) {
-    const m = state.caps.motions.find((x) => x.name === rx.motion)
-    if (m) playMotion(m)
-  }
-  const shown = [
-    ...added,
-    ...kept.map((n) => `${n}（续）`),
-  ].join(' + ')
-  pushLog('region', `${region.name} · ${kind} → ${shown || (rx.motion || '（无预设）')}`)
-  active.timer = setTimeout(() => clearReactionGroup('到时'), REACTION_TTL)
+  if (e.type === 'warn') { pushLog('warn', e.text); return }
+  if (e.type === 'group') pushLog('region', e.text)
 }
 
 function saveProfile() {
