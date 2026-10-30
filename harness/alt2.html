@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>验证 · untitled-engine (Cubism 5)</title>
+<style>
+  html,body{margin:0;height:100%;background:#fff;overflow:hidden}
+  #stage{position:absolute;inset:0}
+  #err{position:absolute;left:12px;top:12px;color:#b00;font:12px/1.5 monospace;white-space:pre-wrap;max-width:70vw}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="err"></div>
+<script src="/vendor/live2dcubismcore.min.js"></script>
+<script>window.process = { env: { NODE_ENV: 'production' } }</script>
+<script type="importmap">
+{ "imports": { "pixi.js": "/tmp/alt2/node_modules/pixi.js/dist/pixi.mjs" } }
+</script>
+<script type="module">
+const err = (m) => { document.getElementById('err').textContent += m + ' | ' }
+window.addEventListener('error', (e) => err('[err] ' + (e.message || e.type)))
+window.addEventListener('unhandledrejection', (e) => err('[reject] ' + (e.reason && e.reason.message || e.reason)))
+try {
+  err('· import')
+  const PIXI = await import('pixi.js')
+  const mod = await import('/tmp/alt2/node_modules/untitled-pixi-live2d-engine/dist/cubism.es.js')
+  err('· keys=' + Object.keys(mod).slice(0, 6).join(','))
+
+  const app = new PIXI.Application()
+  await app.init({ backgroundAlpha: 0, antialias: true, resizeTo: window, autoDensity: true })
+  document.getElementById('stage').appendChild(app.canvas)
+  err('· app ready')
+
+  PIXI.extensions.add(mod.Live2DPlugin)
+  err('· plugin added')
+
+  const model = await mod.Live2DModel.from('/m/%E5%A4%A7%E8%82%A5%E9%B1%BC.model3.json')
+  err('· model loaded')
+  model.anchor.set(0.5, 0.5)
+  app.stage.addChild(model)
+
+  const fit = () => {
+    const w = app.renderer.width / app.renderer.resolution
+    const h = app.renderer.height / app.renderer.resolution
+    const s = Math.min(w / model.internalModel.originalWidth, h / model.internalModel.originalHeight) * 0.95
+    model.scale.set(s)
+    model.position.set(w / 2, h / 2)
+  }
+  fit()
+  window.addEventListener('resize', fit)
+
+  const q = new URLSearchParams(location.search)
+  const steps = Number(q.get('steps') || 0)
+  for (let i = 0; i < steps; i++) model.internalModel.update(1 / 60)
+  app.renderer.render(app.stage)
+  setInterval(() => { try { app.renderer.render(app.stage) } catch {} }, 150)
+  err('· rendered')
+  document.title = 'ALT2 ok draw=' + (model.internalModel.coreModel._drawableIds || []).length
+} catch (e) {
+  err('失败: ' + (e && e.message || e))
+  document.title = 'ALT2 fail'
+}
+</script>
+</body>
+</html>
