@@ -362,6 +362,8 @@ async function loadPhysicsFlow() {
 
 // ---------- 分区互动：动作组（切换，不叠加） ----------
 const REACTION_SOURCE = 'reaction'
+/** 换装/脱鞋/尾巴这类「开关」单独一层：长期保持，不被别的点击/滑动清掉 */
+const SWITCH_SOURCE = 'switch'
 const REACTION_TTL = 6000
 const active = { group: null, timer: 0 }
 
@@ -383,17 +385,28 @@ function applyReaction(region, kind) {
     pushLog('warn', `${region.name} · ${kind} 没有配置反应（现有：${Object.keys(region.reaction || {}).join('/') || '空'}）`)
     return
   }
-  const gid = `${region.name}:${kind}`
-  const wanted = []
-  if (rx.toggle) wanted.push(rx.toggle)
-  for (const name of rx.expr || (rx.expression ? [rx.expression] : [])) wanted.push(name)
-
-  // 同一个开关组再点一次 → 收回（换装 / 脱鞋 / 尾巴这类）
-  if (active.group === gid && rx.toggle) {
-    clearReactionGroup('再点收回')
-    pushLog('region', `${region.name} · ${kind} → 收回 ${rx.toggle}`)
+  // 切换型（换装 / 脱鞋 / 尾巴）：独立成层，**长期保持**。
+  // 别的点击、别的滑动都不会动它；只有再点同一个区域才收回去。
+  if (rx.toggle) {
+    const on = state.layers.hasExpression(rx.toggle)
+    if (on) {
+      state.layers.removeExpression(rx.toggle)
+      pushLog('expr', `− ${rx.toggle}（切换关）`)
+    } else {
+      addExpression(rx.toggle, { source: SWITCH_SOURCE })
+      pushLog('expr', `+ ${rx.toggle}（切换开，长期保持）`)
+    }
+    renderExprChips()
+    // 顺带收掉当前那次临时反应（它本来就是一次性的），切换态保留
+    if (active.group) clearReactionGroup('切换互动')
+    active.group = null
+    pushLog('region', `${region.name} · ${kind} → ${on ? '收回' : '打开'} ${rx.toggle}`)
     return
   }
+
+  const gid = `${region.name}:${kind}`
+  const wanted = []
+  for (const name of rx.expr || (rx.expression ? [rx.expression] : [])) wanted.push(name)
 
   // 切组：只撤掉新组里没有的层。两边都有的（腿:点击 的「加载」→ 腿:滑动 的「加载+脸红」）
   // 原地保留 —— 移除再重建会让表情的动画/淡入从头开始，看起来就是「被重置了一次」。
@@ -421,7 +434,7 @@ function applyReaction(region, kind) {
     ...kept.map((n) => `${n}（续）`),
   ].join(' + ')
   pushLog('region', `${region.name} · ${kind} → ${shown || (rx.motion || '（无预设）')}`)
-  if (!rx.toggle) active.timer = setTimeout(() => clearReactionGroup('到时'), REACTION_TTL)
+  active.timer = setTimeout(() => clearReactionGroup('到时'), REACTION_TTL)
 }
 
 function saveProfile() {
