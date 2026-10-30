@@ -250,7 +250,9 @@ function bootRegions() {
           state.facePinch?.grab(name === '右脸' ? 'R' : 'L')
           pinchExpressions(true)
         } else if (ev.type === 'dragMove') {
-          state.facePinch?.move(ev.dx || 0, ev.dy || 0)
+          // ev.dx/dy 是模型坐标，换成客户端像素再交给捏脸层（maxPull 是按像素定的）
+          const k = state.stage?.model?.scale?.x || 1
+          state.facePinch?.move((ev.dx || 0) * k, (ev.dy || 0) * k)
         } else if (ev.type === 'up') {
           state.facePinch?.release()
           pinchExpressions(false)

@@ -23,6 +23,8 @@ export function createFacePinch({ param, options = {} } = {}) {
     side: 1,             // 单边鼓脸比例
     wiggleHz: 3.2,
     wiggle: 0.25,
+    headTurn: 18,       // 拉满时头的额外偏转角度（@maxPull 像素）
+    maxHeadTurn: 20,    // 上限
     ...options,
   }
 
@@ -32,6 +34,8 @@ export function createFacePinch({ param, options = {} } = {}) {
   let target = 0
   let phase = 0
   const writes = {}
+  // 捏脸时头的跟随偏向（累积位移，松手回零）
+  const push = { x: 0, y: 0 }
 
   const range = (id) => {
     const i = param.info(id)
@@ -52,6 +56,13 @@ export function createFacePinch({ param, options = {} } = {}) {
     param.set(id, val)
     writes[id] = +val.toFixed(3)
   }
+  /** 加性写（头跟随时用，不覆盖 gaze / 待机动作） */
+  const add = (id, delta) => {
+    if (!delta) return
+    const r = range(id)
+    if (!r) return
+    param.set(id, clamp(param.get(id) + delta, r.lo, r.hi))
+  }
 
   /** 按住某一侧脸颊开始捏（side: 'L' | 'R'） */
   function grab(which) {
@@ -64,11 +75,16 @@ export function createFacePinch({ param, options = {} } = {}) {
     if (!side) return
     pulled += Math.hypot(dx, dy)
     target = clamp(pulled / cfg.maxPull, 0, 1)
+    // 头跟着手走：累积带方向的位移，apply 里换成角度
+    push.x = clamp(push.x + dx, -cfg.maxPull * 2, cfg.maxPull * 2)
+    push.y = clamp(push.y + dy, -cfg.maxPull * 2, cfg.maxPull * 2)
   }
   function release() {
     side = null
     pulled = 0
     target = 0
+    push.x = 0
+    push.y = 0
   }
 
   function apply(dtMs = 1000 / 60) {
@@ -89,6 +105,22 @@ export function createFacePinch({ param, options = {} } = {}) {
     if (has('CheeckPuffR')) writeFrac('CheeckPuffR', side === 'R' ? m * cfg.side : 0)
     if (has('CheeksWiggleX')) writeAbs('CheeksWiggleX', wiggleAmt)
 
+    // 头跟着被捏的方向转：脸的变化没那么明显，靠头的幅度把「怕疼跟着走」演出来
+    if (!side) {
+      const decay = Math.exp(-dt * 7)
+      push.x *= decay
+      push.y *= decay
+      if (Math.abs(push.x) < 0.3) push.x = 0
+      if (Math.abs(push.y) < 0.3) push.y = 0
+    }
+    if (push.x || push.y) {
+      const hz = clamp((push.x / cfg.maxPull) * cfg.headTurn, -cfg.maxHeadTurn, cfg.maxHeadTurn)
+      const hy = clamp((push.y / cfg.maxPull) * cfg.headTurn * 0.7, -cfg.maxHeadTurn, cfg.maxHeadTurn)
+      add('ParamAngleZ', hz)
+      add('ParamAngleY', -hy)
+      add('ParamBodyAngleZ', hz * 0.3)
+    }
+
     return { mag: +m.toFixed(2) }
   }
 
@@ -97,6 +129,6 @@ export function createFacePinch({ param, options = {} } = {}) {
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
     params: () => ['CheeckPuff', 'CheeckPuffL', 'CheeckPuffR', 'CheeckPuff2', 'CheeksWiggleX'].filter(has),
-    state: () => ({ side, mag: +mag.toFixed(2), writes: { ...writes } }),
+    state: () => ({ side, mag: +mag.toFixed(2), push: { x: Math.round(push.x), y: Math.round(push.y) }, writes: { ...writes } }),
   }
 }
