@@ -38,6 +38,8 @@ const REGION_MOUTH = {
   // 手被碰：小小的不好意思（嘴微微张开、笑意一点点），跟脚那种「被挠痒」区分开
   左手: { open: 0.12, form: 0.26, smile: 0.32, ms: 2000 },
   右手: { open: 0.12, form: 0.26, smile: 0.32, ms: 2000 },
+  // 摸到胯：嘴上不情愿（下撇、抿着），配黑脸
+  胯: { open: 0.08, form: -0.55, ms: 3600 },
 }
 
 /** 浏览器里打开 /app/ 时没有 Electron 预加载：给一套空壳，方便无头验证渲染 */
@@ -623,6 +625,27 @@ function bootRegions() {
     if (fresh.length) state.store.save(key)
   }
 
+  // 胯部热区：模型自带参数里手臂够不到胯（±1 只能挪 ~400px），
+  // 所以这里单独划一块热区，摸到就有反应；手型只能用「举手护住」近似。
+  const CROTCH_V = 1
+  const oldCrotch = state.store.all.filter((r) => r.name === '胯')
+  if (oldCrotch.length !== 1 || oldCrotch[0].v !== CROTCH_V) {
+    for (const r of oldCrotch) state.store.remove(r.id)
+    const ms = state.stage.modelSize()
+    const cx = ms.width / 2
+    const halfW = ms.width * 0.11
+    const x0 = Math.round(cx - halfW), x1 = Math.round(cx + halfW)
+    const y0 = Math.round(ms.height * 0.415), y1 = Math.round(ms.height * 0.505)
+    state.store.add({
+      name: '胯',
+      z: 6,
+      v: CROTCH_V,
+      points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+      reaction: DEFAULT_REACTIONS['胯'] || {},
+    })
+    state.store.save(key)
+  }
+
   // 左/右脸热区要**跟着变形走**：前倾这类动作会让脸整体下移，
   // 热区若固定在初始位置就会「摸脸点到胸」。这里按当前蒙皮顶点周期重算（只改内存，不改存档）。
   function startFaceRegionTracking(partNames) {
@@ -680,6 +703,13 @@ function bootRegions() {
       // 互动也打进录制标记（tap / pet 第一步），回放时能对上动作
       if (name && ((ev.type === 'tap') || (ev.type === 'pet' && ev.step === 1))) {
         state.recorder?.mark(`${ev.type}:${name}`)
+      }
+      // 摸胯：黑脸 + 脸红 + 护住（举手手型）+ 右转头低头微缩，气泡说「变态」那套
+      if (name === '胯' && ev.type === 'pet' && ev.step === 1) {
+        state.poses?.set('护胯', 340, { holdExtras: true })
+        state.bubble?.say('crotch', { ms: 4200 })
+        clearTimeout(state.crotchHold)
+        state.crotchHold = setTimeout(() => { state.poses?.release(420) }, 4200)
       }
       // 点手 = 竖手指（抬起/放下），不再走表情反应；摸手还是 ＞＜ + 脸红
       if (ev.type === 'tap' && isHand) {
@@ -908,6 +938,38 @@ function bindPassThrough() {
     handCount: () => state.handReader?.count?.() ?? -1,
     /** 热区 → 客户端像素矩形（调热区位置用） */
     screenBox: (name) => regionScreenBox(name),
+    /** 绘制顺序排查：按部件名列出 drawable 的序号与不透明度（判断手有没有被裙子盖住） */
+    partOpacity(name) {
+      const st = state.stage
+      const p = (state.caps.parts || []).find((x) => x.name === name)
+      if (!st || !p) return null
+      return st.part?.get?.(p.id) ?? null
+    },
+    partSet(name, v) {
+      const st = state.stage
+      const p = (state.caps.parts || []).find((x) => x.name === name)
+      if (!st || !p) return false
+      st.part?.set?.(p.id, v)
+      return true
+    },
+    drawables(filter) {
+      const out = []
+      const core = state.stage?.core
+      if (!core) return out
+      for (let i = 0; i < core.getDrawableCount(); i++) {
+        let parent = -1
+        try { parent = core.getDrawableParentPartIndex(i) } catch { continue }
+        if (parent < 0) continue
+        let name = ''
+        try {
+          const pid = core.getPartId(parent).getString().s
+          name = state.caps.parts.find((p) => p.id === pid)?.name || ''
+        } catch {}
+        if (filter && !name.includes(filter)) continue
+        out.push({ i, part: name, op: Math.round((core.getDrawableOpacity(i) || 0) * 100) / 100 })
+      }
+      return out
+    },
     leanState: () => {
       const def = (state.caps?.expressions || []).find((x) => x.name === '前倾')
       const keys = def ? Object.keys(def.params) : []

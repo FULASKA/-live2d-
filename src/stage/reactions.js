@@ -21,6 +21,8 @@ export const DEFAULT_REACTIONS = {
   // 竖手指留在裙摆那套反应里，但手有了自己的热区，手不会被裙摆的矩形抢走
   左手: { tap: { expr: ['＞＜'] }, pet: { expr: ['＞＜', '脸红'] } },
   右手: { tap: { expr: ['＞＜'] }, pet: { expr: ['＞＜', '脸红'] } },
+  // 摸胯：黑脸 + 脸红（动作与气泡文案在 renderer 里配套）
+  胯: { tap: { expr: ['＞＜', '脸红'] }, pet: { expr: ['黑脸', '脸红'] } },
   尾巴: { tap: { toggle: '尾巴开关' } },
 }
 
