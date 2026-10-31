@@ -29,4 +29,7 @@ contextBridge.exposeInMainWorld('shell', {
   actionsSave: (data) => ipcRenderer.invoke('actions:save', data),
   actionsLoad: () => ipcRenderer.invoke('actions:load'),
   openEditor: () => ipcRenderer.send('shell:editor'),
+  // 改动补丁：存的只是「我们加的姿势/台词/反应/热区」，不含模型本体
+  patchSave: (data) => ipcRenderer.invoke('patch:save', data),
+  patchLoad: () => ipcRenderer.invoke('patch:load'),
 })

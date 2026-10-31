@@ -224,6 +224,18 @@ function wireIpc() {
     const [x, y] = win.getPosition()
     win.setPosition(Math.round(x + dx), Math.round(y + dy))
   })
+  // ---------- 改动补丁：记录我们这层加的姿势/台词/反应/热区，发布时只发这个文件 ----------
+  const patchFile = () => path.join(app.getPath('userData'), 'stage-patch.json')
+  ipcMain.handle('patch:save', async (_e, data) => {
+    try {
+      await mkdir(path.dirname(patchFile()), { recursive: true })
+      await writeFile(patchFile(), JSON.stringify(data, null, 2))
+      return { ok: true, file: patchFile() }
+    } catch (e) { return { ok: false, error: String(e?.message || e) } }
+  })
+  ipcMain.handle('patch:load', async () => {
+    try { return JSON.parse(await readFile(patchFile(), 'utf8')) } catch { return null }
+  })
   // ---------- 动作编辑器：存 / 读动作 JSON + 打开编辑窗口 ----------
   const actionsFile = () => path.join(app.getPath('userData'), 'actions.json')
   ipcMain.handle('actions:save', async (_e, data) => {

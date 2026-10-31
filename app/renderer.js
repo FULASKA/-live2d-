@@ -13,7 +13,8 @@ import { createMouth } from '../src/stage/mouth.js'
 import { createIdleFaces } from '../src/stage/idle-faces.js'
 import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
-import { createPoses } from '../src/stage/poses.js'
+import { createPoses, POSES } from '../src/stage/poses.js'
+import { PHRASES } from '../src/stage/phrases.js'
 import { createRecorder } from '../src/stage/recorder.js'
 import { createBubble } from '../src/stage/bubble.js'
 import { createAgentLink } from '../src/stage/agent-link.js'
@@ -108,6 +109,8 @@ async function main() {
   try {
     state.settings = await shell.get()
     state.caps = await fetch('/api/capabilities').then((r) => r.json())
+    // 先吃「改动补丁」：姿势/台词/反应/热区都能被覆盖，用户拿原模型也能复现我们的改动
+    await applyStagePatch()
     await bootStage()
     bootRegions()
     // 对话气泡：漫画式挂在头顶右侧（设置里可切左侧），角色移动/换尺寸时跟着走
@@ -140,6 +143,47 @@ async function main() {
     console.error(e)
     toast(`启动失败：${e.message}`, 6000)
   }
+}
+
+/**
+ * 改动补丁（stage-patch.json）。
+ *
+ * 定位：我们**不发布改过的模型**，只发布「我们这层加了什么」——
+ * 姿势、台词、分区反应、热区几何。下载者拿自己的原模型 + 这个补丁，
+ * 行为就和我们改完一样，不需要二次改膜。
+ *
+ * 注意：moc3 里的绘制顺序、手臂活动范围这类改不了的东西不在补丁范围内，
+ * 那必须重新出模型（补丁里只记录 model 名字，做兼容提示）。
+ */
+async function applyStagePatch() {
+  let p = null
+  try { p = await shell.patchLoad?.() } catch { p = null }
+  if (!p || typeof p !== 'object') return null
+  state.patch = p
+  if (p.poses && typeof p.poses === 'object') Object.assign(POSES, p.poses)
+  if (p.phrases && typeof p.phrases === 'object') Object.assign(PHRASES, p.phrases)
+  if (p.reactions && typeof p.reactions === 'object') Object.assign(DEFAULT_REACTIONS, p.reactions)
+  if (p.model && state.caps?.model?.name && p.model !== state.caps.model.name) {
+    toast(`补丁是为「${p.model}」做的，当前模型是「${state.caps.model.name}」`, 5000)
+  }
+  return p
+}
+
+/** 导出当前改动：姿势 + 台词 + 反应 + 热区（不含模型本体） */
+async function exportStagePatch() {
+  if (!state.caps) return null
+  const data = {
+    version: 1,
+    model: state.caps.model.name,
+    exportedAt: new Date().toISOString(),
+    poses: POSES,
+    phrases: PHRASES,
+    reactions: DEFAULT_REACTIONS,
+    regions: state.store ? { schemaVersion: 2, model: state.caps.model.name, regions: state.store.all } : null,
+  }
+  const r = await shell.patchSave?.(data)
+  toast(r?.ok ? '改动补丁已保存（stage-patch.json）' : '补丁保存失败')
+  return r
 }
 
 async function loadPhysicsFlow() {
@@ -405,6 +449,9 @@ async function bootStage() {
     },
     recStopPlay() { return state.recorder?.stopPlay() ?? false },
     recState: () => state.recorder?.state() ?? null,
+    // ---- 改动补丁 ----
+    patchExport: () => exportStagePatch(),
+    patchState: () => state.patch ? { model: state.patch.model, poses: Object.keys(state.patch.poses || {}), phrases: Object.keys(state.patch.phrases || {}), regions: state.patch.regions?.regions?.length ?? 0 } : null,
     /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
     pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
@@ -573,6 +620,8 @@ function bootRegions() {
     },
   }
   const loaded = state.store.load(key)
+  // 补丁里的热区优先落地（用户拿原模型 + 补丁即可复现同一套热区）
+  if (state.patch?.regions?.regions?.length) state.store.loadJSON(state.patch.regions)
   const missing = loaded ? bands.filter((n) => !state.store.all.some((r) => r.name === n)) : bands
   if (!loaded || missing.length) {
     const seeded = seedRegions({
@@ -1443,6 +1492,7 @@ function bindPanel() {
 
   // ---- 动作录制：开始 / 停止并存 / 列表 / 回放 ----
   $('#open-editor') && ($('#open-editor').onclick = () => shell.openEditor?.())
+  $('#patch-export') && ($('#patch-export').onclick = () => exportStagePatch())
   const recBtn = $('#rec-start')
   const recSel = $('#rec-list')
   let recOn = false
