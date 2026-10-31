@@ -1028,9 +1028,12 @@ function hidePassHint() {
 // 在数值上的含义是窗口尺寸由模型画布推导，而不是反过来测角色包围盒（后者会形成正反馈）。
 const FIT_BASE_W = 540      // zoom = 1 时角色的屏幕宽度（窗口再留出气泡余量）
 const FIT_PAD_X = 0.12      // 左右各 6%：够气泡挂在头侧，又不会把角色缩太小
-const FIT_PAD_Y = 0.18      // 上下各 9%：头顶之上要留出「对话框 + 尾巴点点」的整条缝，点点才落在框与头之间
-const FIT_MIN = 0.25
-const FIT_MAX = 4
+// 上下留白：设置里可调（0–18%）。默认 2% —— 边框刚好包住角色，不再上下各空 9%
+const FIT_PAD_Y_DEFAULT = 0.02
+const padY = () => {
+  const v = Number(state.settings?.padY)
+  return Math.max(0, Math.min(0.2, Number.isFinite(v) ? v : FIT_PAD_Y_DEFAULT))
+}
 
 function fitSize() {
   const ms = state.stage?.modelSize?.()
@@ -1038,7 +1041,7 @@ function fitSize() {
   const k = (FIT_BASE_W / ms.width) * (Number(state.settings?.zoom) || 1)
   return {
     w: Math.round(ms.width * k * (1 + FIT_PAD_X)),
-    h: Math.round(ms.height * k * (1 + FIT_PAD_Y)),
+    h: Math.round(ms.height * k * (1 + padY())),
   }
 }
 
@@ -1082,7 +1085,7 @@ function centerOffsets() {
   const k = 2 * 0.95 // 2 × 视口 margin
   const clamp = (n) => Math.max(-0.4, Math.min(0.4, n))
   return {
-    x: clamp((-k * fx * (1 + FIT_PAD_Y)) / (1 + FIT_PAD_X)),
+    x: clamp((-k * fx * (1 + padY())) / (1 + FIT_PAD_X)),
     y: clamp(-k * fy),
   }
 }
@@ -1112,7 +1115,7 @@ const UI_BASE_ZOOM = 0.8
 function refWindowHeight() {
   const ms = state.stage?.modelSize?.()
   if (!ms?.width || !ms?.height) return null
-  return ms.height * (FIT_BASE_W / ms.width) * (1 + FIT_PAD_Y)
+  return ms.height * (FIT_BASE_W / ms.width) * (1 + padY())
 }
 function zoomFromWindow() {
   const ref = refWindowHeight()
@@ -1120,7 +1123,8 @@ function zoomFromWindow() {
   return window.innerHeight / ref
 }
 function bubbleScale() {
-  return Math.max(0.4, Math.min(2.5, zoomFromWindow() / UI_BASE_ZOOM))
+  // ×1.06：比旧版大一号（用户反馈气泡框偏小）
+  return Math.max(0.4, Math.min(2.5, (zoomFromWindow() / UI_BASE_ZOOM) * 1.06))
 }
 
 function applyBorder(on) {

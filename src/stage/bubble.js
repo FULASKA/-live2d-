@@ -82,9 +82,9 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
     let side = anchorSide
     let x, y
     if (corner) {
-      // 默认形态：贴窗口右上角（选左侧就贴左上角），离窗口边缘留 10px。
-      // 窗口本身是「刚好包住角色」的，所以贴角即贴在头的斜上方，位置可预期、不抖。
-      const PAD = 10
+      // 默认形态：贴窗口右上角（选左侧就贴左上角）。
+      // 留白按窗口高度给（约 2.5%），窗框收窄后气泡跟着往里、不贴边。
+      const PAD = Math.round(Math.max(10, vp.h * 0.025))
       x = side === 'right' ? vp.w - w - PAD : PAD
       y = PAD
     } else if (a) {

@@ -61,6 +61,9 @@ function paint() {
   setCheck('#idle', settings.idle !== false)
   setCheck('#bubble-on', settings.bubble !== false)
   setCheck('#border', !!settings.border)
+  const padY = Number(settings.padY ?? 0.02)
+  setRange('#pad-y', padY)
+  $('#pad-y-readout').textContent = `${Math.round(padY * 100)}%`
   setCheck('#top', !!settings.alwaysOnTop)
   setCheck('#click-through', !!settings.clickThrough)
   if (document.activeElement !== $('#bubble-side')) {
@@ -111,6 +114,11 @@ function wire() {
   $('#bubble-on').onchange = (e) => pushSettings({ bubble: !!e.target.checked })
   $('#bubble-side').onchange = (e) => pushSettings({ bubbleSide: e.target.value === 'left' ? 'left' : 'right' })
   $('#border').onchange = (e) => pushSettings({ border: !!e.target.checked })
+  $('#pad-y').oninput = (e) => {
+    const v = Number(e.target.value)
+    $('#pad-y-readout').textContent = `${Math.round(v * 100)}%`
+    pushSettingsSoon({ padY: v })
+  }
   $('#top').onchange = (e) => pushSettings({ alwaysOnTop: !!e.target.checked })
   $('#click-through').onchange = (e) => pushSettings({ clickThrough: !!e.target.checked })
 

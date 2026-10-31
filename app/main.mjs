@@ -33,6 +33,7 @@ const DEFAULTS = {
   bubble: true,          // 气泡总开关
   bubbleSide: 'right',   // 气泡挂在头的哪一侧：right / left
   border: false,         // 显示窗口边框（拖边框缩放；关掉后回到纯角色）
+  padY: 0.02,            // 上下留白（0–0.2，占画布高度比例）；越小边框越贴角色
   model: process.env.STAGE_MODEL || DEFAULT_MODEL,
 }
 
