@@ -14,7 +14,7 @@
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
-export function createFacePinch({ param, options = {} } = {}) {
+export function createFacePinch({ param, bus, options = {} } = {}) {
   const cfg = {
     maxPull: 260,        // 拖动多少像素算拉满
     // 响应曲线 pow>1：**前段更钝**。原来 0.62 时轻拖 30px 就跳到 35%，
@@ -66,9 +66,10 @@ export function createFacePinch({ param, options = {} } = {}) {
     param.set(id, val)
     writes[id] = +val.toFixed(3)
   }
-  /** 加性写（头跟随时用，不覆盖 gaze / 待机动作） */
+  /** 加性写（头跟随时用，不覆盖 gaze / 待机动作）：角度类走姿态总线 */
   const add = (id, delta) => {
     if (!delta) return
+    if (bus) { bus.add(id, delta); return }
     const r = range(id)
     if (!r) return
     param.set(id, clamp(param.get(id) + delta, r.lo, r.hi))

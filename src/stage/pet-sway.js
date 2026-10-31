@@ -15,7 +15,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 /** 只有头（脸捏脸区走的是捏脸那条路，不在这里） */
 const REGION_GAIN = { 头: 1 }
 
-export function createPetSway({ param, options = {} } = {}) {
+export function createPetSway({ param, bus, options = {} } = {}) {
   const cfg = {
     gain: 1,          // 面板滑杆 0..3
     maxAngle: 30,     // 参数满量程角度（ParamAngleX/Y/Z 都是 ±30）
@@ -38,6 +38,8 @@ export function createPetSway({ param, options = {} } = {}) {
 
   const add = (id, delta) => {
     if (!delta) return
+    // 走姿态总线：抚摸晃动与视线、姿态链同帧合成，物理后一起写回，谁也不会盖掉谁
+    if (bus) { bus.add(id, delta); return }
     const info = param.info(id)
     if (!info) return
     param.set(id, clamp(param.get(id) + delta, info.min, info.max))

@@ -128,6 +128,7 @@ src/stage/engine.js   渲染内核适配层（唯一直接碰内核的文件）
 src/stage/layers.js   L2 表情叠加 / L5 受控参数 / 部件覆盖
 src/stage/reactions.js 分区反应规则（切换不叠加 / 瞬间与长期两层 / 应用壳共用）
 src/stage/gaze.js     L1 眼 → 头 → 身体三通道跟随
+src/stage/pose-bus.js 姿态总线：头/身角度的唯一写入者（物理前喂入、物理后写回，各层只累加）
 src/stage/regions.js  热区入口（barrel）：几何 / 仓库 / 读取器 / 输入按职责拆到 regions/ 下
 src/stage/regions/    geometry（点内判定·包围盒·凸包）· store（增删查·命中·存档）· zones（实时脸/手区·播种）· input（手势）
 src/stage/viewport.js 窗口 A 与模型 B 的绑定、缩放位移

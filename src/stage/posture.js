@@ -15,7 +15,7 @@
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
-export function createPosture({ param, gaze, options = {} } = {}) {
+export function createPosture({ param, gaze, bus, options = {} } = {}) {
   const cfg = {
     strength: 1,
     chest: 24,          // 胸满偏角度（度）
@@ -40,8 +40,11 @@ export function createPosture({ param, gaze, options = {} } = {}) {
   const hipZ = { v0: 0, v1: 0 }
 
   const has = (id) => !!param.info(id)
+  // 姿态总线优先：角度类参数由总线统一在「物理前 / 物理后」各写一次，
+  // 各层只管累加增量，避免互相覆盖（见 pose-bus.js 的说明）。
   const add = (id, delta) => {
     if (!delta) return
+    if (bus) { bus.add(id, delta); return }
     const i = param.info(id)
     if (!i) return
     param.set(id, clamp(param.get(id) + delta, i.min, i.max))

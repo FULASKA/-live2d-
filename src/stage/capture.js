@@ -17,7 +17,7 @@
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
-export function createCapture({ param, options = {} } = {}) {
+export function createCapture({ param, bus, options = {} } = {}) {
   const cfg = {
     breathHz: 0.23,      // 呼吸频率（次/秒的一半，慢一点更自然）
     breathBase: 0.32,    // 呼吸基线 0..1
@@ -41,7 +41,8 @@ export function createCapture({ param, options = {} } = {}) {
     if (!r) return
     param.set(id, clamp(v, r[0], r[1]))
   }
-  const get = (id) => param.get(id) ?? 0
+  // 姿态总线上的合成值优先：本轮头部/身体角度还没写进参数，但物理要吃的就是它
+  const get = (id) => (bus ? bus.peek(id) : (param.get(id) ?? 0))
 
   let t = Math.random() * 10
   let breath = cfg.breathBase

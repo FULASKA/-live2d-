@@ -4,6 +4,7 @@ import { createStage } from '../src/stage/engine.js'
 import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
+import { createPoseBus } from '../src/stage/pose-bus.js'
 import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader, createHandZoneReader } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
@@ -224,8 +225,12 @@ async function bootStage() {
     onEvent: (e) => { if (e.type === 'warn') console.warn('[reaction]', e.text) },
   })
 
+  // 姿态总线：头/身角度的唯一写入者（物理前后各写一次，各层只累加）
+  state.poseBus = createPoseBus({ param: stage.param })
+
   state.gaze = createGaze({
     param: stage.param,
+    bus: state.poseBus,
     // 身体角度交给 posture 层（脊柱链），视线只管眼珠与头
     options: {
       enabled: state.settings.gaze !== false,
@@ -239,23 +244,26 @@ async function bootStage() {
   state.posture = createPosture({
     param: stage.param,
     gaze: state.gaze,
+    bus: state.poseBus,
     options: { strength: Number(state.settings.strength ?? 1) },
   })
 
   // 抚摸晃动：蹭头时额外叠一层摆动（gaze 先定方向，这层再叠幅度）
   state.petSway = createPetSway({
     param: stage.param,
+    bus: state.poseBus,
     options: { gain: Number(state.settings.petGain ?? 1.6) },
   })
 
   // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘
   // 伪面捕驱动：把「我们的姿态」翻译成模型的**面捕捉取通道**
   // （AngleX/Y/Z、PositionX/Y、ParamBreath、JawOpen…），物理链才会整条活起来
-  state.capture = createCapture({ param: stage.param })
+  state.capture = createCapture({ param: stage.param, bus: state.poseBus })
 
   // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘 + 身体前倾放大
   state.facePinch = createFacePinch({
     param: stage.param,
+    bus: state.poseBus,
     options: {
       // 用户手动开了「前倾」时，捏脸就不再抢 LeanInput
       leanBlocked: () => !!state.layers?.hasExpression('前倾'),
@@ -321,6 +329,7 @@ async function bootStage() {
   // 而我们原来在物理**之后**才写这些角度 —— 等于让物理永远在算静止的模型，
   // 头发、耳朵、耳环的物理全部僵死，这就是「没有物理效果」的真正原因。
   stage.onBeforePhysics(() => {
+    state.poseBus?.clear()   // 新的一帧：清掉上一帧的姿态累计
     tickDt()
     updateMotion(frameDt)
     // 姿势值要先钉进 layers，applyPhysics 才会把物理输入一起喂进去
@@ -336,22 +345,22 @@ async function bootStage() {
       // 姿态摆好之后，翻译成面捕捉取通道（物理要吃的就是这些）
       state.capture?.apply(frameDt)
     })
-    // 所有层都写完姿态之后拍快照：这六个角度既是物理输入、又被物理回头重算，
-    // 物理后要用这张快照复原，才不会把抚摸晃动/姿态链的贡献一起抹掉。
-    state.gaze?.holdPose()
+    // 各层只累加了增量，这里统一写成参数，物理拿到的就是这份合成姿态
+    state.poseBus?.flush()
   })
 
   // ② 物理之后：表情 / 嘴 / 活气 / 鼓脸。
-  // 活气层要「读回物理刚算出的值再加偏移」，所以必须晚于物理。
+  // 物理会把 ParamAngle* / ParamBodyAngle* 当输出重算，所以姿态要在这里再写一次 ——
+  // 但写的是**同一份合成姿态**（总线里的累计值），不是某一层的旧值，谁也不会盖掉谁。
   stage.onBeforeUpdate(() => {
-    // 先复原头姿（物理削减掉的部分），表情/嘴/活气再叠在上面 —— 顺序反了会把它们的贡献一起盖掉
-    state.gaze?.restorePose()
     perf.time('post', () => {
       state.layers.apply()
       state.mouth?.apply(frameDt)
       state.idleFaces?.apply(frameDt)
       state.life?.apply(frameDt)
       state.facePinch?.apply(frameDt)
+      // 放在最后：表情层可能也写过这些角度，姿态合成值优先级最高
+      state.poseBus?.flush()
     })
   })
 
@@ -1430,6 +1439,15 @@ function installProbes({ motionState } = {}) {
     /** 跟随层的内部状态（平滑后的眼/头/身），排查「头不转」时看它到底是没算还是有被覆盖 */
     gazeState: () => state.gaze?.state?.() ?? null,
     gazeOpts: () => (state.gaze?.options ? { ...state.gaze.options } : null),
+    /** 姿态总线的当前合成值（排查「写了没生效 / 谁盖了谁」时看这一份） */
+    pose: () => state.poseBus?.snapshot?.() ?? null,
+    /** 关掉伪面捕通道（排查「写了 ParamAngleX 头不动」时用） */
+    captureOff(on = true) {
+      state.capture?.set(on
+        ? { breathAmp: 0, yawGain: 0, pitchGain: 0, tiltGain: 0, posGain: 0, jawFromMouth: 0 }
+        : { breathAmp: 0.006, yawGain: 0.4, pitchGain: 0.4, tiltGain: 1, posGain: 1, jawFromMouth: 1 })
+      return state.capture?.options ?? null
+    },
     /** 手动给一个跟随目标（-1..1，右/上为正）：不移动真实鼠标也能验证转头幅度 */
     gazeTarget(nx = 0, ny = 0) {
       state.gaze?.setTarget(Number(nx), Number(ny))

@@ -1,17 +1,20 @@
 /**
- * 视线与身体跟随（L1 层）—— 让角色「看着你」而不是只有眼珠转。
+ * 视线跟随（L1 层）—— 让角色「看着你」而不是只有眼珠转。
  *
  * 分三个通道，增益与惯性各不同，这是「灵动」的来源：
- *   眼珠（最快）→ 头部角度（中）→ 身体角度（最慢最轻）
- * 全部是**加性**写入：先读当前值（含 Idle 动作自带的小幅摆动），再加偏移并夹到参数范围内，
- * 所以跟随不会把待机动画压死。写点仍然是 beforeModelUpdate。
+ *   眼珠（最快）→ 头部角度（中）→ 身体角度（最慢最轻，现由 posture 链负责）
+ *
+ * 写点：
+ *   - 眼珠：直接写参数（不是物理输出，写了就生效）；
+ *   - 头/身角度：**只往姿态总线累加**（见 pose-bus.js）。这几个参数在 physics3 里
+ *     既入又出，物理会回头重算，谁直接写都会被另一方覆盖 —— 总线的存在就是为了这件事。
  *
  * 不使用内核的 focus()：它只给 eyeBall 与少量角度，无法分区调增益；而且会和这里打架。
  */
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
-export function createGaze({ param, options = {} } = {}) {
+export function createGaze({ param, bus, options = {} } = {}) {
   const cfg = {
     enabled: true,
     strength: 1,        // 总强度 0..1
@@ -42,8 +45,6 @@ export function createGaze({ param, options = {} } = {}) {
     // 默认不翻转（本模型实测：+EyeBallY / +AngleY 均向上，+AngleX / +BodyAngleX 均向右）。
     invertX: false,
     invertY: false,
-    // 物理后再把头部角度写回一次（physics3 会把 ParamAngleX/Y 当输出重算）
-    holdPost: true,
     ...options,
   }
 
@@ -69,47 +70,27 @@ export function createGaze({ param, options = {} } = {}) {
   }
 
   /**
-   * 物理后要写回的姿态通道：头三轴 + 身体三轴。
+   * 头/身角度**不直接写参数**，交给姿态总线（`pose-bus.js`）。
    *
-   * 为什么不能只记「gaze 自己写了多少」：同帧里还有抚摸晃动（`ParamAngleZ/Y`）、
-   * 姿态链、捕获层在写这些参数。它们写在 gaze 之后，于是「恢复 gaze 的旧值」
-   * 会把它们整块抹掉 —— 表现就是「摸头的时候头不跟着手摆、身体也不摇」。
-   * 而且实测这六个参数在 physics3 里**既是输入又是输出**（物理会回头重算），
-   * 所以身体角度同样会被削掉，不能只兜头。
-   *
-   * 做法：在**物理前**的最后一个时刻拍一张姿态快照（此时所有层都写完了），
-   * 物理之后再原样贴回去 —— 物理已经拿正确输入算过头发/耳朵，
-   * 视觉上也不会丢任何一层的贡献。
+   * 原因：`ParamAngle*` / `ParamBodyAngle*` 在 physics3 里既入又出，物理会回头重算它们。
+   * 谁在物理后写就得替所有层负责，谁在物理前写就会被物理削掉 ——
+   * 这正是之前「脸转了头不摇 / 头摇了脸不转」反复横跳的根源。
+   * 现在各层只累加增量，由总线在物理前后各写一次。
    */
-  const POSE_IDS = [
-    'ParamAngleX', 'ParamAngleY', 'ParamAngleZ',
-    'ParamBodyAngleX', 'ParamBodyAngleY', 'ParamBodyAngleZ',
-  ]
-  const held = new Map()
-
-  const add = (id, delta) => {
-    if (!delta) return
+  const addAngle = (id, delta) => {
+    if (!delta || !Number.isFinite(delta)) return
+    if (bus) { bus.add(id, delta); return }
     const info = param.info(id)
     if (!info) return
     param.set(id, clamp(param.get(id) + delta, info.min, info.max))
   }
 
-  /** 物理前最后一步调用：拍快照（所有层写完姿态之后） */
-  function holdPose() {
-    held.clear()
-    if (!cfg.enabled || !cfg.holdPost) return
-    for (const id of POSE_IDS) {
-      const info = param.info(id)
-      if (!info) continue
-      held.set(id, { v: param.get(id), min: info.min, max: info.max })
-    }
-  }
-
-  /** 物理之后调用：把快照贴回去，物理对姿态角度的削减不会露到画面上 */
-  function restorePose() {
-    if (!held.size) return
-    for (const [id, s] of held) param.set(id, clamp(s.v, s.min, s.max))
-    held.clear()
+  /** 眼珠不是物理输出，直接写（也不参与姿态合成） */
+  const addEye = (id, delta) => {
+    if (!delta || !Number.isFinite(delta)) return
+    const info = param.info(id)
+    if (!info) return
+    param.set(id, clamp(param.get(id) + delta, info.min, info.max))
   }
 
   /** 每帧调用（beforeModelUpdate 时刻） */
@@ -134,23 +115,23 @@ export function createGaze({ param, options = {} } = {}) {
 
     if (!cfg.enabled) return
 
-    add('ParamEyeBallX', state.eyeX * cfg.eye)
-    add('ParamEyeBallY', state.eyeY * cfg.eye)
+    addEye('ParamEyeBallX', state.eyeX * cfg.eye)
+    addEye('ParamEyeBallY', state.eyeY * cfg.eye)
     // 转头幅度：基础增益 × 用户可调的 headGain（歪头幅度一起放大，否则头转得多了会显得僵）
     const headAmp = cfg.head * cfg.headGain
-    add('ParamAngleX', state.headX * headAmp * 30)
-    add('ParamAngleY', state.headY * headAmp * 30)
-    add('ParamAngleZ', -state.headX * cfg.headRoll * cfg.headGain * 30)
+    addAngle('ParamAngleX', state.headX * headAmp * 30)
+    addAngle('ParamAngleY', state.headY * headAmp * 30)
+    addAngle('ParamAngleZ', -state.headX * cfg.headRoll * cfg.headGain * 30)
 
     // 身体幅度按方向非对称：向下（埋头）多弯，向上收敛
     const bodyYk = state.bodyY < 0 ? cfg.bowBoost : cfg.liftDamp
-    add('ParamBodyAngleX', state.bodyX * cfg.body * 30)
-    add('ParamBodyAngleY', state.bodyY * cfg.body * bodyYk * 30)
-    add('ParamBodyAngleZ', -state.bodyX * cfg.bodyRoll * 30)
+    addAngle('ParamBodyAngleX', state.bodyX * cfg.body * 30)
+    addAngle('ParamBodyAngleY', state.bodyY * cfg.body * bodyYk * 30)
+    addAngle('ParamBodyAngleZ', -state.bodyX * cfg.bodyRoll * 30)
   }
 
   return {
-    setTarget, setTargetFromScreen, apply, holdPose, restorePose,
+    setTarget, setTargetFromScreen, apply,
     options: cfg,
     set(patch) { Object.assign(cfg, patch) },
     /** 当前平滑后的归一化状态（调试/截图用） */
