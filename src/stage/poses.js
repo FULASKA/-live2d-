@@ -41,10 +41,17 @@ export const POSES = {
     params: { Movement1: 1, Param36: 0.04, Param39: 0.2, Param41: -0.732, Param42: 0 },
     extras: {},
   },
-  // 被摸胯：手抬到胸前护住 + 右转头（正角度 = 角色右侧）+ 低头 + 微微一缩
+  // 被摸胯：手抬到胸前护住 + 往后缩（不是前倾！前倾=凑近，方向反了）+ 右转头但眼睛盯前方
   护胯: {
     params: { Movement2: 1, Param62: 0.034, Param59: 0.476, Param60: 0.86, Param61: 0.022 },
-    extras: { ParamAngleX: 22, ParamAngleY: -6, LeanInput: -10, ParamBodyAngleX: 6, HipAngleZ: 4 },
+    extras: {
+      ParamAngleX: 16,        // 头往角色右侧偏一点（想躲）
+      ParamAngleY: 4,         // 下巴微抬，身体往后
+      ParamEyeBallX: 0,       // 眼睛盯着前方（不躲）
+      ParamEyeBallY: 0,
+      LeanInput: 12,          // 正 = 后仰；负才是前倾凑近
+      HipAngleZ: 2,
+    },
   },
 }
 
