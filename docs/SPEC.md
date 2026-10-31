@@ -56,7 +56,11 @@ DSH 只负责拉起与转发，Stage 是独立软件。
   **输入**，物理在 `beforeModelUpdate` **之前**就算了完 —— 写在 beforeModelUpdate 只会带动直接绑参数的网格，
   物理链条不响应，表现就是「歪得不完整」（「前倾」表情最初就是这样错的）。
   为此 `engine.onBeforePhysics()` 包了一层 `physics.evaluate`，物理输入在它之前写。
-  **既入又出**的参数（`ParamAngle*` / `ParamBodyAngle*`）仍走原写点，否则会被物理回算冲掉。
+- **既入又出**的参数（`ParamAngle*` / `ParamBodyAngle*`，实测六个全是 in+out）要「先喂再复原」：
+  物理前把所有层写完的**姿态快照**记下来（`gaze.holdPose()`），物理之后再原样贴回去
+  （`gaze.restorePose()`，写在 `beforeModelUpdate` 的最前面，之后才让表情/嘴/活气叠上来）。
+  只记「某一层自己写了多少」是不够的 —— 抚摸晃动、姿态链也写这几个参数，
+  按旧值复原会把它们的贡献整块抹掉（「摸头时头不跟手摆」就是这个 bug）。
 - **引擎在渲染时才推进模型**：`model.update(dt)` 只累加，真正的 `internalModel.update()` 发生在渲染管线里。
   因此确定性步进 = 「推进 delta → 渲染一次」，见 `stage.step()`。
 

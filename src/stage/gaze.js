@@ -68,16 +68,48 @@ export function createGaze({ param, options = {} } = {}) {
     if (Math.abs(target.y) < dead) target.y = 0
   }
 
-  /** 只记头部三通道：physics3 的输出里有 ParamAngleX/Y，其余通道不管 */
-  const HEAD_IDS = new Set(['ParamAngleX', 'ParamAngleY', 'ParamAngleZ'])
-  const written = new Map()
+  /**
+   * 物理后要写回的姿态通道：头三轴 + 身体三轴。
+   *
+   * 为什么不能只记「gaze 自己写了多少」：同帧里还有抚摸晃动（`ParamAngleZ/Y`）、
+   * 姿态链、捕获层在写这些参数。它们写在 gaze 之后，于是「恢复 gaze 的旧值」
+   * 会把它们整块抹掉 —— 表现就是「摸头的时候头不跟着手摆、身体也不摇」。
+   * 而且实测这六个参数在 physics3 里**既是输入又是输出**（物理会回头重算），
+   * 所以身体角度同样会被削掉，不能只兜头。
+   *
+   * 做法：在**物理前**的最后一个时刻拍一张姿态快照（此时所有层都写完了），
+   * 物理之后再原样贴回去 —— 物理已经拿正确输入算过头发/耳朵，
+   * 视觉上也不会丢任何一层的贡献。
+   */
+  const POSE_IDS = [
+    'ParamAngleX', 'ParamAngleY', 'ParamAngleZ',
+    'ParamBodyAngleX', 'ParamBodyAngleY', 'ParamBodyAngleZ',
+  ]
+  const held = new Map()
 
-  const add = (id, delta) => {    if (!delta) return
+  const add = (id, delta) => {
+    if (!delta) return
     const info = param.info(id)
     if (!info) return
-    const v = clamp(param.get(id) + delta, info.min, info.max)
-    param.set(id, v)
-    if (HEAD_IDS.has(id)) written.set(id, v)
+    param.set(id, clamp(param.get(id) + delta, info.min, info.max))
+  }
+
+  /** 物理前最后一步调用：拍快照（所有层写完姿态之后） */
+  function holdPose() {
+    held.clear()
+    if (!cfg.enabled || !cfg.holdPost) return
+    for (const id of POSE_IDS) {
+      const info = param.info(id)
+      if (!info) continue
+      held.set(id, { v: param.get(id), min: info.min, max: info.max })
+    }
+  }
+
+  /** 物理之后调用：把快照贴回去，物理对姿态角度的削减不会露到画面上 */
+  function restorePose() {
+    if (!held.size) return
+    for (const [id, s] of held) param.set(id, clamp(s.v, s.min, s.max))
+    held.clear()
   }
 
   /** 每帧调用（beforeModelUpdate 时刻） */
@@ -117,24 +149,8 @@ export function createGaze({ param, options = {} } = {}) {
     add('ParamBodyAngleZ', -state.bodyX * cfg.bodyRoll * 30)
   }
 
-  /**
-   * 物理之后再兜一次头部角度。
-   *
-   * 为什么需要：physics3 的输出里带有 ParamAngleX / ParamAngleY（头部角度既是物理输入、
-   * 又被物理回头重算），实测物理前写进 25.6°、物理后只剩 11°——「脸不转」就是这个原因。
-   * 这里把物理前写下的值在物理后原样写回：物理已经用正确的输入算了头发/耳朵，
-   * 视觉上的角度也不会被削掉。
-   */
-  function applyPost() {
-    if (!cfg.enabled || !cfg.holdPost || !written.size) return
-    for (const [id, v] of written) {
-      if (Math.abs(param.get(id) - v) > 1e-4) param.set(id, v)
-    }
-    written.clear()
-  }
-
   return {
-    setTarget, setTargetFromScreen, apply, applyPost,
+    setTarget, setTargetFromScreen, apply, holdPose, restorePose,
     options: cfg,
     set(patch) { Object.assign(cfg, patch) },
     /** 当前平滑后的归一化状态（调试/截图用） */

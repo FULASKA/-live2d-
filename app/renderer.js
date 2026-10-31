@@ -336,11 +336,16 @@ async function bootStage() {
       // 姿态摆好之后，翻译成面捕捉取通道（物理要吃的就是这些）
       state.capture?.apply(frameDt)
     })
+    // 所有层都写完姿态之后拍快照：这六个角度既是物理输入、又被物理回头重算，
+    // 物理后要用这张快照复原，才不会把抚摸晃动/姿态链的贡献一起抹掉。
+    state.gaze?.holdPose()
   })
 
   // ② 物理之后：表情 / 嘴 / 活气 / 鼓脸。
   // 活气层要「读回物理刚算出的值再加偏移」，所以必须晚于物理。
   stage.onBeforeUpdate(() => {
+    // 先复原头姿（物理削减掉的部分），表情/嘴/活气再叠在上面 —— 顺序反了会把它们的贡献一起盖掉
+    state.gaze?.restorePose()
     perf.time('post', () => {
       state.layers.apply()
       state.mouth?.apply(frameDt)
@@ -348,8 +353,6 @@ async function bootStage() {
       state.life?.apply(frameDt)
       state.facePinch?.apply(frameDt)
     })
-    // 物理会把 ParamAngleX/Y 当自己的输出重算，头部角度得在物理之后再写回一次
-    state.gaze?.applyPost()
   })
 
   // ---------- 标定探针（开发期用：单参数覆写 / 物理读回采样） ----------
