@@ -13,6 +13,7 @@ import { createMouth } from '../src/stage/mouth.js'
 import { createIdleFaces } from '../src/stage/idle-faces.js'
 import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
+import { createPoses } from '../src/stage/poses.js'
 import { createProfiler } from '../src/stage/perf.js'
 
 const $ = (s) => document.querySelector(s)
@@ -196,6 +197,8 @@ async function bootStage() {
   state.mouth = createMouth({ param: stage.param })
   // 随机小表情：笑 / 吐舌头 / 吐舌头+单眼笑，待机时自己冒出来
   state.idleFaces = createIdleFaces({ param: stage.param })
+  // 终点姿势：举手 / 竖手指 / 狗尾草（数值取自模型自带的 motion3 末帧），过渡自己补
+  state.poses = createPoses({ layers: state.layers })
 
   let lastT = performance.now()
   let frameDt = 1000 / 60
@@ -249,6 +252,8 @@ async function bootStage() {
   stage.onBeforePhysics(() => {
     tickDt()
     updateMotion(frameDt)
+    // 姿势值要先钉进 layers，applyPhysics 才会把物理输入一起喂进去
+    state.poses?.apply(frameDt)
     state.layers.applyPhysics()
     state.facePinch?.applyPhysics()
     perf.time('pre', () => {
@@ -287,6 +292,34 @@ async function bootStage() {
       state.layers.addExpression('probe', list.map(([Id, Value]) => ({ Id, Value, Blend: blend })), { fade: 0, source: 'probe' })
     },
     clear() { state.layers.removeSource('probe') },
+    /** 诊断：直接写核心参数并立刻读回（判断「写不进去」还是「写完又被覆盖」） */
+    setRead(id, v) {
+      const idx = state.stage.param.index(id)
+      const before = state.stage.param.get(id)
+      state.stage.param.set(id, v)
+      const after = state.stage.param.get(id)
+      return { id, idx, before, after }
+    },
+    /** 诊断：在 beforeModelUpdate 末尾（各层写完之后）读一次 */
+    readAtUpdate(id) {
+      return new Promise((resolve) => {
+        const off = state.stage.onBeforeUpdate(() => { const v = state.stage.param.get(id); off(); resolve(v) })
+      })
+    },
+    /** 诊断：一次分层写入，在物理前/更新前各读一次值（判断写点与覆盖） */
+    traceWrite(id, v) {
+      state.layers.removeSource('probe')
+      state.layers.addExpression('probe', [{ Id: id, Value: v, Blend: 'Overwrite' }], { fade: 0, source: 'probe' })
+      return new Promise((resolve) => {
+        const out = []
+        const offPre = state.stage.onBeforePhysics(() => out.push(['pre', state.stage.param.get(id)]))
+        const offPost = state.stage.onBeforeUpdate(() => out.push(['post', state.stage.param.get(id)]))
+        setTimeout(() => {
+          offPre(); offPost(); state.layers.removeSource('probe')
+          resolve({ out: out.slice(0, 6), isIn: state.physics.inputs.has(id), isOut: state.physics.outputs.has(id) })
+        }, 150)
+      })
+    },
     // ---- 捏脸 / 活气 / 嘴的探针 ----
     pinch(side = 'L', px = 320) { state.facePinch?.grab(side); state.facePinch?.move(px, 0) },
     pinchEnd() { state.facePinch?.release() },
@@ -305,6 +338,10 @@ async function bootStage() {
     faces: () => state.idleFaces?.presets() ?? [],
     face(name) { return state.idleFaces?.trigger(name) ?? null },
     faceState: () => state.idleFaces?.state() ?? null,
+    /** 终点姿势：预设清单 / 切换 / 状态（数值来自模型自带 motion3 末帧） */
+    poses: () => state.poses?.presets() ?? [],
+    pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
+    poseState: () => state.poses?.state() ?? null,
     /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
     pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
@@ -402,8 +439,7 @@ async function bootStage() {
     /** 关掉桌面光标反馈，让探针的合成鼠标事件不被真实光标覆盖 */
     desktopGaze(on) { window.__noDesktopGaze = !on },
     /** 在物理之前强行钉住某些参数（测物理响应用） */
-    holdPre(list) {
-      state._holdPreOff?.()
+    holdPre(list) {      state._holdPreOff?.()
       state._holdPreOff = state.stage.onBeforePhysics(() => {
         for (const [id, v] of list) state.stage.param.set(id, v)
       })
@@ -579,7 +615,12 @@ function bootRegions() {
     },
     onEvent: (ev) => {
       const name = ev.region?.name
-      if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
+      const isHand = name === '左手' || name === '右手'
+      // 点手 = 竖手指（抬起/放下），不再走表情反应；摸手还是 ＞＜ + 脸红
+      if (ev.type === 'tap' && isHand) {
+        const next = state.poses?.toggle('竖手指')
+        toast(next === '竖手指' ? '竖手指' : '手放下')
+      } else if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
       if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) {
         state.reactions.apply(ev.region, 'pet')
         // 摸到不同部位，嘴给一个对应的情绪（表情包只改眼/脸，嘴是我们这层驱动的）

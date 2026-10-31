@@ -333,6 +333,10 @@ export function createHandZoneReader({ core, internalModel, displayNames, canvas
     return { minX, minY, maxX, maxY }
   }
 
+  // 上一帧两只手的中心：抬手这类动作会让一只手靠近中线，
+  // 只按中线切分可能把「左/右」判反 —— 用上一帧的位置做连续性校正。
+  const last = { left: null, right: null }
+
   return {
     /** 读当前帧的双手热区（模型画布像素）；拿不到就返回 []，调用方保留旧几何 */
     read() {
@@ -358,9 +362,26 @@ export function createHandZoneReader({ core, internalModel, displayNames, canvas
       if (pts.length < 12) return []
       const all = box(pts)
       const midX = (all.minX + all.maxX) / 2
-      const left = [], right = []
+      let left = [], right = []
       for (const p of pts) (p[0] < midX ? left : right).push(p)
       if (left.length < 6 || right.length < 6) return []
+
+      const center = (cluster) => {
+        const b = box(cluster)
+        return [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2]
+      }
+      let [lc, rc] = [center(left), center(right)]
+      // 连续性：抬手时一只手会离开原位、甚至跨过中线，按上一帧认人比按 x 排序稳
+      if (last.left && last.right) {
+        const keep = Math.hypot(lc[0] - last.left[0], lc[1] - last.left[1]) + Math.hypot(rc[0] - last.right[0], rc[1] - last.right[1])
+        const swap = Math.hypot(rc[0] - last.left[0], rc[1] - last.left[1]) + Math.hypot(lc[0] - last.right[0], lc[1] - last.right[1])
+        if (swap < keep * 0.9) {
+          ;[left, right] = [right, left]
+          ;[lc, rc] = [center(left), center(right)]
+        }
+      }
+      last.left = lc
+      last.right = rc
 
       const out = []
       for (const [name, cluster] of [['左手', left], ['右手', right]]) {
