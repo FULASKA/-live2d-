@@ -125,7 +125,8 @@ src/stage/engine.js   渲染内核适配层（唯一直接碰内核的文件）
 src/stage/layers.js   L2 表情叠加 / L5 受控参数 / 部件覆盖
 src/stage/reactions.js 分区反应规则（切换不叠加 / 瞬间与长期两层 / 应用壳共用）
 src/stage/gaze.js     L1 眼 → 头 → 身体三通道跟随
-src/stage/regions.js  热区几何、自动铺初稿、手势识别（点/抚摸/拖动）
+src/stage/regions.js  热区入口（barrel）：几何 / 仓库 / 读取器 / 输入按职责拆到 regions/ 下
+src/stage/regions/    geometry（点内判定·包围盒·凸包）· store（增删查·命中·存档）· zones（实时脸/手区·播种）· input（手势）
 src/stage/viewport.js 窗口 A 与模型 B 的绑定、缩放位移
 scripts/serve.mjs     开发版服务 CLI（内部调用 src/server）
 scripts/shot.mjs      无头验证：真实时间等待 → 取样 → 截图

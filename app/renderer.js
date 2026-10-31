@@ -397,6 +397,58 @@ function pinchExpressions(on) {
   }
 }
 
+/**
+ * 热区迁移表。
+ * 每条 = 「这几个热区应该有几块、当前版本号是多少、不够或过旧时怎么重建」。
+ * 以前是三个手写的 if 链堆在 bootRegions 里（脸 V3 / 手 V1 / 胯 V1），加一个热区就要
+ * 再抄一段；现在加新热区只是往表里加一条。
+ */
+const ZONE_MIGRATIONS = [
+  {
+    // 脸部热区（捏脸用）：左右各一个，眼睛以上仍归头部；老档案（单个「脸」）自动迁移
+    names: ['左脸', '右脸'],
+    version: 3,
+    build: ({ core, internalModel, displayNames, canvas }) => (
+      faceRegions({ core, internalModel, displayNames, canvas }).map((r) => ({ ...r, reaction: {} }))
+    ),
+  },
+  {
+    // 手部热区：两只手垂在裙摆两侧、又会随身体摆，固定矩形必然错位，所以按网格周期重算
+    names: ['左手', '右手'],
+    version: 1,
+    build: ({ handReader }) => handReader.read().map((r) => ({ ...r, reaction: DEFAULT_REACTIONS[r.name] || {} })),
+  },
+  {
+    // 胯部热区：模型自带参数里手臂够不到胯（±1 只能挪 ~400px），所以单独划一块
+    names: ['胯'],
+    version: 1,
+    build: ({ canvas }) => {
+      const cx = canvas.width / 2
+      const halfW = canvas.width * 0.11
+      const x0 = Math.round(cx - halfW), x1 = Math.round(cx + halfW)
+      const y0 = Math.round(canvas.height * 0.415), y1 = Math.round(canvas.height * 0.505)
+      return [{ name: '胯', z: 6, points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], reaction: DEFAULT_REACTIONS['胯'] || {} }]
+    },
+  },
+]
+
+function migrateZones(ctx) {
+  for (const m of ZONE_MIGRATIONS) {
+    const cur = state.store.all.filter((r) => m.names.includes(r.name))
+    const upToDate = cur.length === m.names.length && cur.every((r) => r.v === m.version)
+    if (upToDate) continue
+    for (const r of cur) state.store.remove(r.id)
+    let fresh = []
+    try { fresh = m.build(ctx) || [] } catch (e) {
+      // 迁移失败不要静默：以前这里 catch 成空数组，直接把热区丢掉且毫无痕迹
+      console.warn('[zones] 迁移失败', m.names.join('/'), e)
+      continue // 保留旧的热区，下次启动再试
+    }
+    for (const z of fresh) state.store.add({ ...z, v: m.version })
+    if (fresh.length) state.store.save(ctx.key)
+  }
+}
+
 function bootRegions() {
   const key = state.caps.model.name
   state.store = createRegionStore([])
@@ -424,28 +476,7 @@ function bootRegions() {
     state.store.save(key)
   }
 
-  // 脸部热区（捏脸用）：左右各一个，眼睛以上仍归头部；老档案（单个「脸」）自动迁移
-  const FACE_V = 3
-  const old = state.store.all.filter((r) => r.name === '脸' || r.name === '左脸' || r.name === '右脸')
-  const needFace = old.length !== 2 || old.some((r) => r.v !== FACE_V)
-  if (needFace) {
-    for (const r of old) state.store.remove(r.id)
-    for (const fr of faceRegions({
-      core: state.stage.core,
-      internalModel: state.stage.model.internalModel,
-      displayNames: names,
-      canvas: state.stage.modelSize(),
-    })) {
-      state.store.add({ ...fr, v: FACE_V, reaction: {} })
-    }
-    state.store.save(key)
-  }
-
-  // 手部热区（左手/右手）：两只手垂在裙摆两侧、又会随身体摆，固定矩形必然错位，
-  // 所以和脸一样按网格周期重算。老的档案没有这两块，自动补，不动别的热区。
-  const HAND_V = 1
-  const oldHands = state.store.all.filter((r) => r.name === '左手' || r.name === '右手')
-  const needHands = oldHands.length !== 2 || oldHands.some((r) => r.v !== HAND_V)
+  // 手部热区读取器：迁移与周期重算共用同一个（索引表内部缓存）
   const handReader = createHandZoneReader({
     core: state.stage.core,
     internalModel: state.stage.model.internalModel,
@@ -453,36 +484,16 @@ function bootRegions() {
     canvas: state.stage.modelSize(),
   })
   state.handReader = handReader
-  if (needHands) {
-    for (const r of oldHands) state.store.remove(r.id)
-    let fresh = []
-    try { fresh = handReader.read() } catch { fresh = [] }
-    for (const fr of fresh) {
-      state.store.add({ ...fr, v: HAND_V, reaction: DEFAULT_REACTIONS[fr.name] || {} })
-    }
-    if (fresh.length) state.store.save(key)
-  }
 
-  // 胯部热区：模型自带参数里手臂够不到胯（±1 只能挪 ~400px），
-  // 所以这里单独划一块热区，摸到就有反应；手型只能用「举手护住」近似。
-  const CROTCH_V = 1
-  const oldCrotch = state.store.all.filter((r) => r.name === '胯')
-  if (oldCrotch.length !== 1 || oldCrotch[0].v !== CROTCH_V) {
-    for (const r of oldCrotch) state.store.remove(r.id)
-    const ms = state.stage.modelSize()
-    const cx = ms.width / 2
-    const halfW = ms.width * 0.11
-    const x0 = Math.round(cx - halfW), x1 = Math.round(cx + halfW)
-    const y0 = Math.round(ms.height * 0.415), y1 = Math.round(ms.height * 0.505)
-    state.store.add({
-      name: '胯',
-      z: 6,
-      v: CROTCH_V,
-      points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-      reaction: DEFAULT_REACTIONS['胯'] || {},
-    })
-    state.store.save(key)
-  }
+  // 热区版本迁移（脸 V3 / 手 V1 / 胯 V1）：缺了就补，版本旧了就重建，不改动其它热区
+  migrateZones({
+    key,
+    handReader,
+    core: state.stage.core,
+    internalModel: state.stage.model.internalModel,
+    displayNames: names,
+    canvas: state.stage.modelSize(),
+  })
 
   // 左/右脸热区要**跟着变形走**：前倾这类动作会让脸整体下移，
   // 热区若固定在初始位置就会「摸脸点到胸」。这里按当前蒙皮顶点周期重算（只改内存，不改存档）。
