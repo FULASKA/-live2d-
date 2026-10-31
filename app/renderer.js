@@ -360,6 +360,8 @@ async function bootStage() {
     bubbleHide() { state.bubble?.hide() },
     bubbleState: () => state.bubble?.state() ?? null,
     bubbleSide(side) { state.bubble?.setSide(side) },
+    /** 说一句预设台词（thinking / working / waiting / success / error / head / hand …） */
+    say(key, ms = 0) { return state.bubble?.say(key, { ms }) ?? null },
     /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
     pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
@@ -638,6 +640,7 @@ function bootRegions() {
       if (ev.type === 'tap' && isHand) {
         const next = state.poses?.toggle('竖手指')
         toast(next === '竖手指' ? '竖手指' : '手放下')
+        state.bubble?.say('hand', { ms: 2400 })
       } else if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
       if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) {
         state.reactions.apply(ev.region, 'pet')

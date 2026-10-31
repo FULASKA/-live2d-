@@ -1,21 +1,22 @@
 /**
  * 对话气泡（DOM 浮层）。
  *
- * 尺寸规则（按需求定的三段）：
- *   1. 字少 → 用大字（基础字号），框小、贴着脑袋；
- *   2. 字多 → 字号逐级变小、框跟着变宽变高（有最大宽/高）；
- *   3. 撑到最大高度 → 框不再变大，内容变成可上下滑动。
+ * 位置与尺寸都按「漫画式短句气泡」定：
+ *   - 贴在头的左上/右上外角（设置里可切），不压脸；
+ *   - 短句用大字（20px 起），字多一点逐档降到 14px，框最宽约 250px；
+ *   - 只在极端长文本时才长高/滚动（正常走 phrases.js 的预设短句，不该触发）。
  *
- * 位置：默认浮在头顶上方居中；头顶空间不够就翻到下方。
- * 气泡只负责「显示」，谁来说话、什么时候说，由调用方决定。
+ * 气泡只负责「显示」，说什么由调用方（phrases.js / agent-link）决定。
  */
 
+import { pickPhrase } from './phrases.js'
+
 const FONT_STEPS = [
-  [24, 22],   // ≤24 字：22px
-  [64, 18],
-  [140, 16],
-  [240, 14],
-  [Infinity, 13],
+  [12, 20],   // ≤12 字：20px（漫画泡泡的「大字」档）
+  [26, 18],
+  [48, 16],
+  [90, 15],
+  [Infinity, 14],
 ]
 
 export function createBubble({ el, anchor, side = 'right' }) {
@@ -23,6 +24,8 @@ export function createBubble({ el, anchor, side = 'right' }) {
   el.classList.add('bubble')
   let visible = false
   let lastText = ''
+  let lastKey = ''
+  let hideTimer = 0
   let anchorSide = side === 'left' ? 'left' : 'right'
 
   const viewport = () => ({ w: window.innerWidth, h: window.innerHeight })
@@ -34,13 +37,13 @@ export function createBubble({ el, anchor, side = 'right' }) {
   }
 
   /**
-   * 排版：字号 → 量高 → 超出就继续缩字号；缩到最小还高 → 定高 + 滚动。
-   * 宽度交给 CSS（min/max-width + fit-content），框会随文字变宽，到上限后换行变高。
+   * 排版：紧凑漫画泡泡。宽度上限按窗口窄算（≈250px），字号按字数降档；
+   * 只在极端长文本时才让它长高/滚动 —— 正常走预设短句，不该出现滚动。
    */
   function layout(text) {
     const vp = viewport()
-    const maxH = Math.max(120, vp.h * 0.36)
-    el.style.maxWidth = `${Math.round(vp.w * 0.72)}px`
+    const maxH = Math.max(96, vp.h * 0.26)
+    el.style.maxWidth = `${Math.round(Math.min(268, vp.w * 0.62))}px`
     el.style.maxHeight = `${Math.round(maxH)}px`
 
     const len = Array.from(text).length
@@ -49,9 +52,9 @@ export function createBubble({ el, anchor, side = 'right' }) {
     el.style.overflowY = 'visible'
     el.style.height = 'auto'
 
-    // 字号已经按档位给过了，这里只在「真的放不下」时再压一档，避免小窗里顶破屏幕
+    // 极长文本兜底（预设短句一般到不了这里）
     let guard = 0
-    while (el.scrollHeight > maxH && fs > 12 && guard++ < 12) {
+    while (el.scrollHeight > maxH && fs > 13 && guard++ < 8) {
       fs -= 1
       el.style.fontSize = `${fs}px`
     }
@@ -63,30 +66,29 @@ export function createBubble({ el, anchor, side = 'right' }) {
   }
 
   /**
-   * 漫画式定位：气泡挂在「头顶的右侧/左侧角上」，不是悬在正上方。
-   *   - 右侧：气泡左下角贴着头的右上方（略微重叠一点，像对话框压过来）
-   *   - 左侧：镜像
-   * 角色靠边放不下时自动翻到另一侧；上下方向同理。
+   * 漫画式定位：泡泡贴在「头的右上方 / 左上方」外角，不压脸。
+   *   右侧：左边缘落在头的 right 外一点点；左侧镜像。
+   * 放不下自动翻边；顶部空间不够就往头侧下方挪。
    */
   function place() {
     const a = anchor?.()
     const vp = viewport()
-    const w = el.offsetWidth || 240
-    const h = el.offsetHeight || 80
-    const gap = 10
+    const w = el.offsetWidth || 200
+    const h = el.offsetHeight || 60
     let side = anchorSide
     let x, y
     if (a) {
-      const topY = a.top - Math.round(h * 0.18) // 主体在头顶附近，不算「头顶正中」
+      const offset = Math.max(4, Math.round(w * 0.06))
       if (side === 'right') {
-        x = a.right - 12
-        if (x + w > vp.w - 6) { side = 'left'; x = a.left + 12 - w }
+        x = a.right + offset
+        if (x + w > vp.w - 6) { side = 'left'; x = a.left - offset - w }
       } else {
-        x = a.left + 12 - w
-        if (x < 6) { side = 'right'; x = a.right - 12 }
+        x = a.left - offset - w
+        if (x < 6) { side = 'right'; x = a.right + offset }
       }
-      y = topY - h - gap
-      if (y < 6) y = a.top + 6 // 头顶空间不够 → 贴着头上沿往下挂
+      // 泡泡底边略高于头顶（留出点点尾巴的高度）
+      y = a.top - h - 22
+      if (y < 6) y = a.top + 10
     } else {
       x = vp.w / 2 - w / 2
       y = vp.h * 0.16
@@ -96,7 +98,7 @@ export function createBubble({ el, anchor, side = 'right' }) {
     el.style.left = `${Math.round(x)}px`
     el.style.top = `${Math.round(y)}px`
     el.dataset.anchor = side
-    // 气泡在头顶上方 → 尾巴朝下；挂在头侧 → 尾巴朝上
+    // 尾巴点点的方向：泡泡在头顶上方 → 点点朝下；挂在头侧 → 也朝下（都是低点更高）
     el.dataset.side = a && y + h + 2 <= a.top ? 'above' : 'below'
   }
 
@@ -123,6 +125,17 @@ export function createBubble({ el, anchor, side = 'right' }) {
     hide() {
       visible = false
       el.classList.remove('on')
+    },
+    /** 说一句预设台词（key 见 phrases.js：thinking / working / waiting / success / error / head / hand …） */
+    say(key, { ms = 0 } = {}) {
+      const line = pickPhrase(key, lastKey === key ? lastText : '')
+      lastKey = key
+      this.show(line, { state: key })
+      if (ms > 0) {
+        clearTimeout(hideTimer)
+        hideTimer = setTimeout(() => { if (lastKey === key) this.hide() }, ms)
+      }
+      return line
     },
     /** 位置依赖角色位置，角色一动（拖窗口/换尺寸）就重排 */
     reposition() { if (visible) place() },

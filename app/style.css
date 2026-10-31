@@ -101,22 +101,22 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 #perf b { color: #8fd0ff; }
 #perf span { display: block; color: #9fb6d6; }
 
-/* ===== 对话气泡 =====
-   尺寸由 bubble.js 算（字号按字数降档、宽度 fit-content、超高转滚动），
-   这里只管长相：浅色纸感 + 与角色同侧的尾巴 + 按状态换边色。 */
+/* ===== 对话气泡（漫画式短句）=====
+   外形参考：粗描边 + 米白底 + 两个「思考点」当尾巴；尺寸由 bubble.js 给。 */
 #bubble {
   position: fixed; z-index: 40; display: block;
-  min-width: 88px; max-width: 72%;
-  padding: 10px 14px; border-radius: 16px;
-  background: rgba(250, 252, 255, 0.97);
-  color: #18213a;
-  border: 1px solid rgba(64, 104, 168, 0.28);
-  box-shadow: 0 10px 26px rgba(8, 18, 38, 0.34);
-  line-height: 1.5; font-weight: 500; letter-spacing: 0.01em;
+  min-width: 64px; max-width: 268px;
+  padding: 9px 16px; border-radius: 22px;
+  background: #fdfaf3;
+  color: #23283a;
+  border: 3px solid #4a5f9e;
+  box-shadow: 0 8px 20px rgba(10, 18, 38, 0.3);
+  line-height: 1.34; font-weight: 700; letter-spacing: 0.02em;
+  text-align: center;
   white-space: pre-wrap; word-break: break-word;
   overflow-wrap: anywhere;
   pointer-events: none;
-  opacity: 0; transform: translateY(5px) scale(0.985);
+  opacity: 0; transform: translateY(4px) scale(0.97);
   transition: opacity 0.16s ease, transform 0.16s ease;
   scrollbar-width: thin; scrollbar-color: rgba(70, 105, 165, 0.45) transparent;
 }
@@ -125,33 +125,33 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 #bubble::-webkit-scrollbar { width: 6px; }
 #bubble::-webkit-scrollbar-thumb { background: rgba(70, 105, 165, 0.4); border-radius: 3px; }
 
-/* 尾巴：两个三角形叠出「实心 + 描边」。挂在头的哪一侧，尾巴就贴那一侧的角 */
+/* 尾巴：两个由大到小的「思考点」，斜着指向角色 */
 #bubble::before, #bubble::after {
-  content: ""; position: absolute; width: 0; height: 0;
-  border-left: 9px solid transparent; border-right: 9px solid transparent;
+  content: ""; position: absolute; border-radius: 50%;
+  background: #fdfaf3; border: 3px solid #4a5f9e;
+  box-sizing: border-box;
 }
-#bubble[data-anchor="right"]::before, #bubble[data-anchor="right"]::after { left: 16px; }
-#bubble[data-anchor="left"]::before, #bubble[data-anchor="left"]::after { right: 16px; }
-#bubble[data-side="above"]::before {
-  bottom: -9px;
-  border-top: 9px solid rgba(64, 104, 168, 0.28);
-}
-#bubble[data-side="above"]::after {
-  bottom: -7px;
-  border-top: 9px solid rgba(250, 252, 255, 0.97);
-}
-#bubble[data-side="below"]::before {
-  top: -9px;
-  border-bottom: 9px solid rgba(64, 104, 168, 0.28);
-}
-#bubble[data-side="below"]::after {
-  top: -7px;
-  border-bottom: 9px solid rgba(250, 252, 255, 0.97);
-}
+#bubble::before { width: 12px; height: 12px; }
+#bubble::after { width: 7px; height: 7px; border-width: 2px; }
+#bubble[data-anchor="right"][data-side="above"]::before { left: 18px; bottom: -18px; }
+#bubble[data-anchor="right"][data-side="above"]::after { left: 9px; bottom: -32px; }
+#bubble[data-anchor="left"][data-side="above"]::before { right: 18px; bottom: -18px; }
+#bubble[data-anchor="left"][data-side="above"]::after { right: 9px; bottom: -32px; }
+#bubble[data-side="below"]::before { top: -18px; }
+#bubble[data-side="below"]::after { top: -32px; }
+#bubble[data-anchor="right"][data-side="below"]::before { left: 18px; }
+#bubble[data-anchor="right"][data-side="below"]::after { left: 9px; }
+#bubble[data-anchor="left"][data-side="below"]::before { right: 18px; }
+#bubble[data-anchor="left"][data-side="below"]::after { right: 9px; }
 
-/* 状态色：不影响文字可读性，只换描边 */
-#bubble[data-state="thinking"] { border-color: rgba(122, 150, 214, 0.55); }
-#bubble[data-state="working"] { border-color: rgba(86, 158, 250, 0.6); }
-#bubble[data-state="waiting"] { border-color: rgba(236, 168, 74, 0.65); }
-#bubble[data-state="success"] { border-color: rgba(96, 190, 132, 0.62); }
-#bubble[data-state="error"] { border-color: rgba(232, 104, 104, 0.68); }
+/* 状态色：只换描边，文字仍保持深色可读 */
+#bubble[data-state="thinking"] { border-color: #6b7fc0; }
+#bubble[data-state="thinking"]::before, #bubble[data-state="thinking"]::after { border-color: #6b7fc0; }
+#bubble[data-state="working"] { border-color: #4a7fd0; }
+#bubble[data-state="working"]::before, #bubble[data-state="working"]::after { border-color: #4a7fd0; }
+#bubble[data-state="waiting"] { border-color: #d99a3c; }
+#bubble[data-state="waiting"]::before, #bubble[data-state="waiting"]::after { border-color: #d99a3c; }
+#bubble[data-state="success"] { border-color: #4d9e6f; }
+#bubble[data-state="success"]::before, #bubble[data-state="success"]::after { border-color: #4d9e6f; }
+#bubble[data-state="error"] { border-color: #c75d5d; }
+#bubble[data-state="error"]::before, #bubble[data-state="error"]::after { border-color: #c75d5d; }
