@@ -9,7 +9,8 @@ Windows 桌面上的 Live2D 角色：透明无边框窗口、跟随鼠标视线�
 
 **本项目的所有下载包都不含「大肥鱼」模型。** 模型版权归原作者，作者明确禁止二次发布，所以：
 
-- 请自行向原作者获取模型（`大肥鱼.model3.json` 及其 `moc3` / 贴图 / 动作 / 物理文件，通常是一个文件夹）；
+- **模型出处**：Bilibili UP 主 **神宫凉子**，视频 [BV1KmxY66EZ3](https://www.bilibili.com/video/BV1KmxY66EZ3)；
+- 请到上述作者 / 视频处自行获取模型（`大肥鱼.model3.json` 及其 `moc3` / 贴图 / 动作 / 物理文件，通常是一个文件夹）；
 - 拿到后把它「挂载」给桌宠即可（见下一节），程序按模型名字记忆路径；
 - 也支持任意 Cubism 5 导出的 `.model3.json`，只是互动热区是按大肥鱼模型调校的，别的模型需要自己调。
 
@@ -83,6 +84,7 @@ npm run pack                         # 打便携版到 release/
 - 本仓库**代码**：MIT，见 [LICENSE](LICENSE)。
 - **不含** Cubism Core（Live2D 专有许可）→ `scripts/fetch-core.mjs` 自行获取。
 - **不含** 大肥鱼模型与 PSD（作者禁止再分发）→ 自行获取，见开头说明。
-- 模型署名（合规使用时）：原画 / 拆分 **神宫凉子**，Live2D 建模 **霓虹猫_NeonNeko**。
+- 模型来源：Bilibili UP 主 **神宫凉子**（[BV1KmxY66EZ3](https://www.bilibili.com/video/BV1KmxY66EZ3)），
+  原画 / 拆分 神宫凉子，Live2D 建模 **霓虹猫_NeonNeko**；使用前请遵守作者要求。
 - 依赖 `pixi.js`、`untitled-pixi-live2d-engine` 均为 MIT。
 - 商用需另行评估 Live2D publication license 与模型作者授权。
