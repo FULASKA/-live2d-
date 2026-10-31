@@ -18,7 +18,7 @@ Windows 桌面上的 Live2D 角色：透明无边框窗口、跟随鼠标视线�
 
 ## 下载与安装
 
-1. 到 [Releases](../../releases) 下载 `大肥鱼Live2d桌宠-v1.0.0-win32-x64.zip`；
+1. 到 [Releases](../../releases) 下载 `dafeiyu-live2d-pet-v1.0.0-win32-x64.zip`；
 2. 解压到一个固定目录（路径含中文没问题）；
 3. 双击 `大肥鱼Live2d桌宠.exe`；
 4. 第一次启动弹窗选模型 → 选你自己的 `大肥鱼.model3.json`，之后启动即记住。
