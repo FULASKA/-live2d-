@@ -1429,6 +1429,7 @@ function installProbes({ motionState } = {}) {
     view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
     /** 跟随层的内部状态（平滑后的眼/头/身），排查「头不转」时看它到底是没算还是有被覆盖 */
     gazeState: () => state.gaze?.state?.() ?? null,
+    gazeOpts: () => (state.gaze?.options ? { ...state.gaze.options } : null),
     /** 手动给一个跟随目标（-1..1，右/上为正）：不移动真实鼠标也能验证转头幅度 */
     gazeTarget(nx = 0, ny = 0) {
       state.gaze?.setTarget(Number(nx), Number(ny))

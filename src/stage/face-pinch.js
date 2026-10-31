@@ -174,8 +174,9 @@ export function createFacePinch({ param, options = {} } = {}) {
       const hy = clamp((push.y / cfg.maxPull) * cfg.headTurn * 0.7, -cfg.maxHeadTurn, cfg.maxHeadTurn)
       add('ParamAngleZ', hz)
       add('ParamAngleY', -hy)
-      // 捏脸也朝手的方向转脸：只歪不转的话，脸被拽住会像贴片
-      add('ParamAngleX', hz * 1.4)
+      // 捏脸也朝手的方向转脸：只歪不转的话，脸被拽住会像贴片。
+      // 系数比歪头大：捏拉通常只有几十像素，按 hz 原样写太小（60px 只有 4°）。
+      add('ParamAngleX', hz * 2.2)
       add('ParamBodyAngleZ', hz * 0.3)
     }
   }
