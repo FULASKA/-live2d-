@@ -343,6 +343,8 @@ async function bootStage() {
       state.life?.apply(frameDt)
       state.facePinch?.apply(frameDt)
     })
+    // 物理会把 ParamAngleX/Y 当自己的输出重算，头部角度得在物理之后再写回一次
+    state.gaze?.applyPost()
   })
 
   // ---------- 标定探针（开发期用：单参数覆写 / 物理读回采样） ----------

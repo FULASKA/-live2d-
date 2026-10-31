@@ -38,6 +38,8 @@ export function createGaze({ param, options = {} } = {}) {
     // 默认不翻转（本模型实测：+EyeBallY / +AngleY 均向上，+AngleX / +BodyAngleX 均向右）。
     invertX: false,
     invertY: false,
+    // 物理后再把头部角度写回一次（physics3 会把 ParamAngleX/Y 当输出重算）
+    holdPost: true,
     ...options,
   }
 
@@ -62,10 +64,16 @@ export function createGaze({ param, options = {} } = {}) {
     if (Math.abs(target.y) < dead) target.y = 0
   }
 
+  /** 只记头部三通道：physics3 的输出里有 ParamAngleX/Y，其余通道不管 */
+  const HEAD_IDS = new Set(['ParamAngleX', 'ParamAngleY', 'ParamAngleZ'])
+  const written = new Map()
+
   const add = (id, delta) => {    if (!delta) return
     const info = param.info(id)
     if (!info) return
-    param.set(id, clamp(param.get(id) + delta, info.min, info.max))
+    const v = clamp(param.get(id) + delta, info.min, info.max)
+    param.set(id, v)
+    if (HEAD_IDS.has(id)) written.set(id, v)
   }
 
   /** 每帧调用（beforeModelUpdate 时刻） */
@@ -103,8 +111,24 @@ export function createGaze({ param, options = {} } = {}) {
     add('ParamBodyAngleZ', -state.bodyX * cfg.bodyRoll * 30)
   }
 
+  /**
+   * 物理之后再兜一次头部角度。
+   *
+   * 为什么需要：physics3 的输出里带有 ParamAngleX / ParamAngleY（头部角度既是物理输入、
+   * 又被物理回头重算），实测物理前写进 25.6°、物理后只剩 11°——「脸不转」就是这个原因。
+   * 这里把物理前写下的值在物理后原样写回：物理已经用正确的输入算了头发/耳朵，
+   * 视觉上的角度也不会被削掉。
+   */
+  function applyPost() {
+    if (!cfg.enabled || !cfg.holdPost || !written.size) return
+    for (const [id, v] of written) {
+      if (Math.abs(param.get(id) - v) > 1e-4) param.set(id, v)
+    }
+    written.clear()
+  }
+
   return {
-    setTarget, setTargetFromScreen, apply,
+    setTarget, setTargetFromScreen, apply, applyPost,
     options: cfg,
     set(patch) { Object.assign(cfg, patch) },
     /** 当前平滑后的归一化状态（调试/截图用） */
