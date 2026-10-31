@@ -227,7 +227,12 @@ async function bootStage() {
   state.gaze = createGaze({
     param: stage.param,
     // 身体角度交给 posture 层（脊柱链），视线只管眼珠与头
-    options: { enabled: state.settings.gaze !== false, strength: Number(state.settings.strength ?? 1), body: 0, bodyRoll: 0 },
+    options: {
+      enabled: state.settings.gaze !== false,
+      strength: Number(state.settings.strength ?? 1),
+      headGain: Number(state.settings.headGain ?? 1.25),
+      body: 0, bodyRoll: 0,
+    },
   })
 
   // 姿态链：头 → 胸 → 腰 逐级跟随（弹簧 + 过冲），并且喂给物理权重最高的输入
@@ -1069,7 +1074,7 @@ function applySettings(next) {
   if (Number.isFinite(zoom)) applyFit() // zoom = 角色大小：窗口尺寸跟着它重算
 
   const strength = Number(state.settings.strength ?? 1)
-  state.gaze?.set({ enabled: state.settings.gaze !== false, strength })
+  state.gaze?.set({ enabled: state.settings.gaze !== false, strength, headGain: Number(state.settings.headGain ?? 1.25) })
   state.posture?.set({ strength })
   state.petSway?.set({ gain: Number(state.settings.petGain ?? 1.6) })
 
@@ -1421,6 +1426,11 @@ function installProbes({ motionState } = {}) {
     view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
     /** 跟随层的内部状态（平滑后的眼/头/身），排查「头不转」时看它到底是没算还是有被覆盖 */
     gazeState: () => state.gaze?.state?.() ?? null,
+    /** 手动给一个跟随目标（-1..1，右/上为正）：不移动真实鼠标也能验证转头幅度 */
+    gazeTarget(nx = 0, ny = 0) {
+      state.gaze?.setTarget(Number(nx), Number(ny))
+      return state.gaze?.state?.().target ?? null
+    },
     /** 真实轮廓在窗口里的包围盒（客户端像素）+ 相对窗口中心的偏移 dx/dy */
     maskBox: () => {
       const m = state.mask || refreshMask(true)

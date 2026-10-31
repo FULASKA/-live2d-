@@ -21,6 +21,10 @@ export function createGaze({ param, options = {} } = {}) {
     // ParamBodyAngleY（胸腔）满偏能带动头部约 450px —— 埋头/抬头真正的杠杆在身体。
     eye: 0.85,
     head: 0.9,          // × ParamAngleX 的 30° → 27°
+    // 转头幅度总增益（设置里的「转头幅度」滑杆，默认 1.25 → 约 34°）。
+    // 注意 ParamAngleX/Y 的量程就是 ±30°：满偏时会被 add() 夹住，
+    // 所以增益主要拉的是**中段**（指针在角色附近小幅移动时的角度），这正是「看着更灵动」的地方。
+    headGain: 1.25,
     headRoll: 0.12,     // × 30° → 3.6°，横向看时轻微歪头
     body: 0.45,         // × 30° → 13.5°
     bodyRoll: 0.08,
@@ -100,9 +104,11 @@ export function createGaze({ param, options = {} } = {}) {
 
     add('ParamEyeBallX', state.eyeX * cfg.eye)
     add('ParamEyeBallY', state.eyeY * cfg.eye)
-    add('ParamAngleX', state.headX * cfg.head * 30)
-    add('ParamAngleY', state.headY * cfg.head * 30)
-    add('ParamAngleZ', -state.headX * cfg.headRoll * 30)
+    // 转头幅度：基础增益 × 用户可调的 headGain（歪头幅度一起放大，否则头转得多了会显得僵）
+    const headAmp = cfg.head * cfg.headGain
+    add('ParamAngleX', state.headX * headAmp * 30)
+    add('ParamAngleY', state.headY * headAmp * 30)
+    add('ParamAngleZ', -state.headX * cfg.headRoll * cfg.headGain * 30)
 
     // 身体幅度按方向非对称：向下（埋头）多弯，向上收敛
     const bodyYk = state.bodyY < 0 ? cfg.bowBoost : cfg.liftDamp

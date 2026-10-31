@@ -55,6 +55,9 @@ function paint() {
   setRange('#zoom', zoom)
   $('#zoom-readout').textContent = `${Math.round(zoom * 100)}%`
   setRange('#strength', Number(settings.strength ?? 1))
+  const headGain = Number(settings.headGain ?? 1.25)
+  setRange('#head-gain', headGain)
+  showHeadGain(headGain)
   setRange('#pet-gain', Number(settings.petGain ?? 1.6))
 
   setCheck('#gaze', settings.gaze !== false)
@@ -69,6 +72,11 @@ function paint() {
 function setRange(sel, v) {
   const el = $(sel)
   if (el && document.activeElement !== el) el.value = v
+}
+/** 转头幅度读数：显示参数角度的请求幅度（模型量程 ±30°，超出部分会被夹住） */
+function showHeadGain(g) {
+  const el = $('#head-gain-readout')
+  if (el) el.textContent = `${Math.round(27 * g)}°`
 }
 function setCheck(sel, on) {
   const el = $(sel)
@@ -140,6 +148,11 @@ function wire() {
     pushSettingsSoon({ zoom })
   }
   $('#strength').oninput = (e) => pushSettingsSoon({ strength: Number(e.target.value) })
+  $('#head-gain').oninput = (e) => {
+    const g = Number(e.target.value)
+    showHeadGain(g)
+    pushSettingsSoon({ headGain: g })
+  }
   $('#pet-gain').oninput = (e) => pushSettingsSoon({ petGain: Number(e.target.value) })
   $('#gaze').onchange = (e) => pushSettings({ gaze: !!e.target.checked })
   $('#bubble-on').onchange = (e) => pushSettings({ bubble: !!e.target.checked })

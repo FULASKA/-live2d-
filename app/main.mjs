@@ -24,6 +24,7 @@ const DEFAULTS = {
   offsetY: 0,
   gaze: true,
   strength: 1,
+  headGain: 1.25,   // 转头幅度（ParamAngleX/Y 的增益倍数），设置窗口可调
   petGain: 1.6,
   alwaysOnTop: true,
   clickThrough: false,
