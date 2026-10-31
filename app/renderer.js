@@ -511,10 +511,13 @@ async function bootStage() {
       return
     }
     const dt = Math.max(0.008, dtMs / 1000)
-    const vx = (x - motionState.x) / dt
-    const vy = (y - motionState.y) / dt
-    const ax = (vx - motionState.vx) / dt
-    const ay = (vy - motionState.vy) / dt
+    // 拖动中优先用「抓取向量」（pointermove 的实时位移速度）；窗口跟着鼠标走时，
+    // 用窗口坐标做差分几乎恒为 0，物理自然要等到松手才动 —— 这就是之前「拖完才甩」的原因
+    const dragV = state.windowDragging && state.dragVec && performance.now() - state.dragVec.t < 120 ? state.dragVec : null
+    const vx = dragV ? dragV.vx : (x - motionState.x) / dt
+    const vy = dragV ? dragV.vy : (y - motionState.y) / dt
+    const ax = Math.max(-20000, Math.min(20000, (vx - motionState.vx) / dt))
+    const ay = Math.max(-20000, Math.min(20000, (vy - motionState.vy) / dt))
     motionState.x = x
     motionState.y = y
     motionState.vx = vx
@@ -530,8 +533,8 @@ async function bootStage() {
       const targetX = Math.max(-10, Math.min(10, -motionState.vx * 0.02))
       const targetY = Math.max(-7, Math.min(7, -motionState.vy * 0.014))
       // 弹簧-阻尼：stiffness 越大跟得越紧，damping 越大越快停
-      dragShape.vrx += ((targetX - dragShape.rx) * 70 - dragShape.vrx * 11) * dt
-      dragShape.vry += ((targetY - dragShape.ry) * 70 - dragShape.vry * 11) * dt
+      dragShape.vrx += ((targetX - dragShape.rx) * 90 - dragShape.vrx * 12) * dt
+      dragShape.vry += ((targetY - dragShape.ry) * 90 - dragShape.vry * 12) * dt
       dragShape.rx += dragShape.vrx * dt
       dragShape.ry += dragShape.vry * dt
       state.poseBus?.add('ParamBodyAngleRX', dragShape.rx)
@@ -1009,11 +1012,17 @@ function bootRegions() {
     if (!dx && !dy) return
     lastX = e.screenX
     lastY = e.screenY
+    // 抓取向量：按事件时间算实时速度（px/s），拖拽物理直接吃这份，而不是等窗口坐标的帧间差分
+    const now = performance.now()
+    const dtEv = Math.max(0.004, (now - (state.dragVec?.t || now - 16)) / 1000)
+    const cap = 6000
+    state.dragVec = { vx: Math.max(-cap, Math.min(cap, dx / dtEv)), vy: Math.max(-cap, Math.min(cap, dy / dtEv)), t: now }
     shell.moveBy(dx, dy)
   })
   const end = (e) => {
     dragging = false
     state.windowDragging = false
+    state.dragVec = null
     el.classList.remove('dragging')
     try { el.releasePointerCapture(e.pointerId) } catch {}
   }
@@ -1915,6 +1924,7 @@ function installProbes({ motionState } = {}) {
     mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
     /** 视口状态（缩放/偏移/实际像素缩放）—— 排查「窗口跟着角色」时的落点 */
     view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
+    dragState: () => ({ dragging: !!state.windowDragging, vec: state.dragVec || null }),
     /** 跟随层的内部状态（平滑后的眼/头/身），排查「头不转」时看它到底是没算还是有被覆盖 */
     gazeState: () => state.gaze?.state?.() ?? null,
     gazeOpts: () => (state.gaze?.options ? { ...state.gaze.options } : null),
