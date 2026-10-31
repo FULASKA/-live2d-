@@ -801,9 +801,16 @@ function bootRegions() {
         }, state.settings?.token)
       }
       const isHand = name === '左手' || name === '右手'
-      // 一互动就让待机动作让位：不然她自己在换重心，人会误以为是「不听使唤」。
+      // 一互动就让待机动作让位：不是暂停，而是彻底停掉当前动作（撤表情/姿势/固定参数），
+      // 否则会出现「黑脸 + 打瞌睡半睁眼」这种叠出来的怪状态。
       // 只认真正的接触（按下 / 抚摸 / 拖拽），hover 不算 —— 鼠标停在角色身上不该冻结待机。
-      if (ev.type === 'down' || ev.type === 'pet' || ev.type === 'dragStart') state.idle?.pause?.(2200)
+      if (ev.type === 'down' || ev.type === 'pet' || ev.type === 'dragStart') state.idle?.reset?.(2600)
+      // 摸胸：右手盖到胸口（举手姿势），表情走分区反应（屑屑眼）
+      if (name === '胸' && ev.type === 'pet' && ev.step === 1) {
+        state.poses?.set('举手', 320)
+        clearTimeout(state.chestHold)
+        state.chestHold = setTimeout(() => { state.poses?.release(420) }, 3600)
+      }
       // 摸胯：黑脸 + 脸红 + 护住（举手手型）+ 右转头低头微缩，气泡说「变态」那套
       if (name === '胯' && ev.type === 'pet' && ev.step === 1) {
         state.poses?.set('护胯', 340, { holdExtras: true })

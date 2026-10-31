@@ -207,6 +207,18 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart
     }
   }
 
+  /**
+   * 互动打断：不是「暂停」，而是把当前动作彻底停掉 —— 交给 onFinish 撤表情/姿势/嘴型，
+   * 再释放钉住的参数。否则会出现「黑脸时还在做打瞌睡」这种一只眼睁一只眼闭的怪状态。
+   */
+  function reset(ms = 2200) {
+    const done = cur
+    cur = null
+    if (done) { try { onFinish?.(done.name, done.r) } catch {} }
+    releaseHolds()
+    pausedUntil = Math.max(pausedUntil, performance.now() + ms)
+  }
+
   /** 解除让位（外部控制用；不再等满 pause 窗口） */
   function resume() {
     pausedUntil = 0
@@ -281,7 +293,7 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart
   }
 
   return {
-    apply, trigger, pause, resume,
+    apply, trigger, pause, reset, resume,
     routines: () => Object.keys(ROUTINES),
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
