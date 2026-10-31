@@ -941,7 +941,9 @@ function bootRegions() {
         if (k) state.bubble?.say(k, { ms: 2400 })
       }
       if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) {
-        state.reactions.apply(ev.region, 'pet')
+        // 额头抚摸回退成「头」之后，反应表也要按「头」查，否则 ＞＜ / 脸红 出不来
+        const rxRegion = ev.region?.name && ev.region.name !== name ? { ...ev.region, name } : ev.region
+        state.reactions.apply(rxRegion, 'pet')
         // 脚 / 腰 = 被挠痒：痒痒的动作 + 躲痒台词；其它部位按映射各说一句
         if (name === '脚' || name === '腰') {
           state.tickle?.start()
