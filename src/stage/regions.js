@@ -287,6 +287,107 @@ export function createFaceZoneReader({ core, internalModel, displayNames, canvas
   }
 }
 
+/**
+ * 手部热区读取器：左右手各一块，跟着网格走。
+ *
+ * 为什么不能像腰/裙摆那样写死在某个 y 段：两只手本来就垂在裙摆两侧，
+ * 大臂/小臂/手腕又都在参数链上（LArm/LForearm/LWrist…），身体一摆、头一转手就跟着动。
+ * 固定矩形要么盖不到手，要么把手外的裙子也算进去。
+ *
+ * 模型里「手」是一个部件、两坨网格（左右各一只），所以按整体包围盒的中线切两半：
+ * 中线两侧必然各是一只手，取各自包围盒加一点余量就是热区。
+ */
+export function createHandZoneReader({ core, internalModel, displayNames, canvas }) {
+  const W = canvas?.width || 3749
+  const H = canvas?.height || 7697
+  let indices = null
+  let sig = ''
+
+  /** 「手」部件下的 drawable 索引表（部件名判定结果按部件缓存，别每次全量扫 715 个） */
+  const collect = () => {
+    const n = core.getDrawableCount()
+    const byParent = new Map()
+    const out = []
+    for (let i = 0; i < n; i++) {
+      let parent = -1
+      try { parent = core.getDrawableParentPartIndex(i) } catch { parent = -1 }
+      if (parent < 0) continue
+      let hit = byParent.get(parent)
+      if (hit === undefined) {
+        hit = /^手$|^手指/.test(displayNames?.get?.(parent) || '')
+        byParent.set(parent, hit)
+      }
+      if (hit) out.push(i)
+    }
+    return out
+  }
+
+  const box = (pts) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+    return { minX, minY, maxX, maxY }
+  }
+
+  return {
+    /** 读当前帧的双手热区（模型画布像素）；拿不到就返回 []，调用方保留旧几何 */
+    read() {
+      const s = `${core.getDrawableCount()}/${core.getPartCount()}`
+      if (!indices || s !== sig) {
+        indices = collect()
+        sig = s
+      }
+      const pts = []
+      for (let k = 0; k < indices.length; k++) {
+        const i = indices[k]
+        if (!(core.getDrawableOpacity(i) > 0.05)) continue
+        let vtx
+        try { vtx = internalModel.getDrawableVertices(i) } catch { continue }
+        if (!vtx || vtx.length < 6) continue
+        for (let t = 0; t < vtx.length; t += 2) {
+          const x = vtx[t], y = vtx[t + 1]
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+          if (x < -W || x > W * 2 || y < -H || y > H * 2) continue
+          pts.push([x, y])
+        }
+      }
+      if (pts.length < 12) return []
+      const all = box(pts)
+      const midX = (all.minX + all.maxX) / 2
+      const left = [], right = []
+      for (const p of pts) (p[0] < midX ? left : right).push(p)
+      if (left.length < 6 || right.length < 6) return []
+
+      const out = []
+      for (const [name, cluster] of [['左手', left], ['右手', right]]) {
+        const b = box(cluster)
+        // 余量按手本身大小给，手指边缘不贴死
+        const pad = Math.max(10, Math.max(b.maxX - b.minX, b.maxY - b.minY) * 0.08)
+        const coords = {
+          x0: clamp(Math.round(b.minX - pad), 0, W),
+          y0: clamp(Math.round(b.minY - pad), 0, H),
+          x1: clamp(Math.round(b.maxX + pad), 0, W),
+          y1: clamp(Math.round(b.maxY + pad), 0, H),
+        }
+        out.push({
+          name,
+          z: 8, // 压过裙摆(4)/腰(5)/胸(6)：手垂在裙子前面，摸到手就该算手
+          points: [
+            [coords.x0, coords.y0], [coords.x1, coords.y0],
+            [coords.x1, coords.y1], [coords.x0, coords.y1],
+          ],
+        })
+      }
+      return out
+    },
+    count() { return indices ? indices.length : -1 },
+  }
+}
+
 export function seedRegions({ core, internalModel, displayNames, canvas }) {
   const partName = (index) => displayNames?.get?.(index) || ''
   const n = core.getDrawableCount()

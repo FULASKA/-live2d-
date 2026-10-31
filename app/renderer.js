@@ -4,7 +4,7 @@ import { createStage } from '../src/stage/engine.js'
 import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
-import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader } from '../src/stage/regions.js'
+import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader, createHandZoneReader } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
@@ -31,6 +31,9 @@ const REGION_MOUTH = {
   腿: { open: 0.26, form: 0.10, funnel: 0.30, ms: 2600 }, // 发晕：嘴微微张开、有点呆
   脚: { open: 0.50, form: 0.55, smile: 0.85, ms: 3200 },  // 被挠痒：忍不住笑出来
   头: { open: 0.10, form: 0.22, smile: 0.30, ms: 2200 },
+  // 手被碰：小小的不好意思（嘴微微张开、笑意一点点），跟脚那种「被挠痒」区分开
+  左手: { open: 0.12, form: 0.26, smile: 0.32, ms: 2000 },
+  右手: { open: 0.12, form: 0.26, smile: 0.32, ms: 2000 },
 }
 
 /** 浏览器里打开 /app/ 时没有 Electron 预加载：给一套空壳，方便无头验证渲染 */
@@ -501,6 +504,28 @@ function bootRegions() {
     state.store.save(key)
   }
 
+  // 手部热区（左手/右手）：两只手垂在裙摆两侧、又会随身体摆，固定矩形必然错位，
+  // 所以和脸一样按网格周期重算。老的档案没有这两块，自动补，不动别的热区。
+  const HAND_V = 1
+  const oldHands = state.store.all.filter((r) => r.name === '左手' || r.name === '右手')
+  const needHands = oldHands.length !== 2 || oldHands.some((r) => r.v !== HAND_V)
+  const handReader = createHandZoneReader({
+    core: state.stage.core,
+    internalModel: state.stage.model.internalModel,
+    displayNames: names,
+    canvas: state.stage.modelSize(),
+  })
+  state.handReader = handReader
+  if (needHands) {
+    for (const r of oldHands) state.store.remove(r.id)
+    let fresh = []
+    try { fresh = handReader.read() } catch { fresh = [] }
+    for (const fr of fresh) {
+      state.store.add({ ...fr, v: HAND_V, reaction: DEFAULT_REACTIONS[fr.name] || {} })
+    }
+    if (fresh.length) state.store.save(key)
+  }
+
   // 左/右脸热区要**跟着变形走**：前倾这类动作会让脸整体下移，
   // 热区若固定在初始位置就会「摸脸点到胸」。这里按当前蒙皮顶点周期重算（只改内存，不改存档）。
   function startFaceRegionTracking(partNames) {
@@ -514,15 +539,31 @@ function bootRegions() {
     state.faceReader = reader
     setInterval(() => {
       const cur = state.store.all.filter((r) => r.name === '左脸' || r.name === '右脸')
-      if (cur.length !== 2) return
-      let fresh = []
-      perf.time('face', () => {
-        try { fresh = reader.read() } catch { fresh = [] }
-      })
-      if (fresh.length !== 2) return
-      for (const r of cur) {
-        const f = fresh.find((x) => x.name === r.name)
-        if (f) r.points = f.points
+      if (cur.length === 2) {
+        let fresh = []
+        perf.time('face', () => {
+          try { fresh = reader.read() } catch { fresh = [] }
+        })
+        if (fresh.length === 2) {
+          for (const r of cur) {
+            const f = fresh.find((x) => x.name === r.name)
+            if (f) r.points = f.points
+          }
+        }
+      }
+      // 手和脸用同一个心跳：各自缓存索引表，单次都是亚毫秒级
+      const hands = state.store.all.filter((r) => r.name === '左手' || r.name === '右手')
+      if (hands.length === 2) {
+        let freshHands = []
+        perf.time('hand', () => {
+          try { freshHands = state.handReader.read() } catch { freshHands = [] }
+        })
+        if (freshHands.length === 2) {
+          for (const r of hands) {
+            const f = freshHands.find((x) => x.name === r.name)
+            if (f) r.points = f.points
+          }
+        }
       }
     }, 80)
   }
@@ -750,6 +791,33 @@ function bindPassThrough() {
       }
     },
     regions: () => (state.store?.all || []).map((r) => ({ name: r.name, z: r.z })),
+    /** 当前在场的表情层（验证「摸手不该出竖食指」用） */
+    exprs: () => state.layers?.inspect?.() ?? null,
+    handBoxes: () => (state.store?.all || []).filter((r) => r.name === '左手' || r.name === '右手').map((r) => {
+      const xs = (r.points || []).map((p) => p[0])
+      const ys = (r.points || []).map((p) => p[1])
+      return { name: r.name, z: r.z, minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) }
+    }),
+    handCount: () => state.handReader?.count?.() ?? -1,
+    /** 热区 → 客户端像素矩形（调热区位置用；和 faceCenter 同一套换算） */
+    screenBox: (name) => {
+      const r = state.store?.all?.find((x) => x.name === name)
+      if (!r || !r.points?.length) return null
+      const xs = r.points.map((p) => p[0])
+      const ys = r.points.map((p) => p[1])
+      const st = state.stage
+      const cr = st.canvas.getBoundingClientRect()
+      const sc = st.model.scale.x
+      const ms = st.modelSize()
+      const sx = (mx) => cr.left + st.model.position.x + (mx - ms.width / 2) * sc
+      const sy = (my) => cr.top + st.model.position.y + (my - ms.height / 2) * sc
+      return {
+        left: sx(Math.min(...xs)), top: sy(Math.min(...ys)),
+        right: sx(Math.max(...xs)), bottom: sy(Math.max(...ys)),
+        width: (Math.max(...xs) - Math.min(...xs)) * sc,
+        height: (Math.max(...ys) - Math.min(...ys)) * sc,
+      }
+    },
     leanState: () => {
       const def = (state.caps?.expressions || []).find((x) => x.name === '前倾')
       const keys = def ? Object.keys(def.params) : []
