@@ -6,3 +6,6 @@ tmp/
 *.log
 .env
 .DS_Store
+
+# 发布产物（zip 太大，不进仓库）
+release/*.zip

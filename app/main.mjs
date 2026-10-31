@@ -5,14 +5,42 @@
 //   - 窗口尺寸 A 与模型尺寸 B 分离：A 改窗口大小，B 只改模型缩放（渲染层 zoom），互不牵连
 //   - 穿透模式：win.setIgnoreMouseEvents(true, { forward: true })，用全局快捷键 Ctrl+Alt+L 找回
 //   - 退出：Ctrl+Alt+Q（穿透态下也能用）
-import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen, dialog } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const DEFAULT_MODEL = 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大肥鱼.model3.json'
+// 便携/测试：STAGE_HOME 覆盖用户数据目录（设置文件跟着走，可做干净环境）
+if (process.env.STAGE_HOME) { try { app.setPath('userData', process.env.STAGE_HOME) } catch {} }
+// 启动参数：--model "路径\model3.json"（自动化安装 / 快捷方式用）
+const ARG_MODEL = (() => { const i = process.argv.indexOf('--model'); return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : null })()
+const DEV_MODEL = 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大肥鱼.model3.json'
+// 发布包：模型随包放在 resources/app/model/（完整版）或由用户自己选（发布版不带模型）
+const BUNDLED_MODEL = path.join(ROOT, 'model', '大肥鱼.model3.json')
+
+/** 解析模型路径：设置 → 包内 model/ → 环境变量 → 开发机内置 */
+function resolveModel() {
+  if (settings.model && existsSync(settings.model)) return settings.model
+  if (existsSync(BUNDLED_MODEL)) return BUNDLED_MODEL
+  if (process.env.STAGE_MODEL && existsSync(process.env.STAGE_MODEL)) return process.env.STAGE_MODEL
+  if (existsSync(DEV_MODEL)) return DEV_MODEL
+  return null
+}
+
+/** 启动时拿模型：找不到就弹选择框（发布包不带模型）；取消返回 null */
+async function resolveModelOrPick() {
+  const found = resolveModel()
+  if (found) return found
+  const r = await dialog.showOpenDialog({
+    title: '选择 Live2D 模型（.model3.json）',
+    properties: ['openFile'],
+    filters: [{ name: 'Live2D 模型', extensions: ['model3.json'] }],
+  })
+  return r.canceled ? null : (r.filePaths[0] || null)
+}
 
 const DEFAULTS = {
   width: 520,
@@ -36,7 +64,7 @@ const DEFAULTS = {
   bodyShape: 0,          // 体型：0 默认 / 0.4 体型1 / 1 体型2（Clothes2 参数，设置里拉条调）
   dragPhysics: true,     // 拖拽物理：拖动窗口时让模型自己的物理跟着甩（类似 VTS 的拖拽物理演算）
   autoStart: false,      // 开机自启（Windows 登录时启动舞台）
-  model: process.env.STAGE_MODEL || DEFAULT_MODEL,
+  model: null,           // 启动时由 resolveModel() 决定（发布版没有模型，要用户选）
 }
 
 let settings = { ...DEFAULTS }
@@ -331,6 +359,18 @@ function wireIpc() {
     broadcastSettings()
     return { ...settings }
   })
+  ipcMain.handle('model:choose', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: '选择 Live2D 模型（.model3.json）',
+      properties: ['openFile'],
+      filters: [{ name: 'Live2D 模型', extensions: ['model3.json'] }],
+    })
+    if (r.canceled || !r.filePaths[0]) return { ok: false }
+    settings.model = r.filePaths[0]
+    await saveSettings()
+    setTimeout(() => { app.relaunch(); app.exit(0) }, 60)
+    return { ok: true, model: settings.model }
+  })
   ipcMain.on('win:move', (_e, { dx = 0, dy = 0 } = {}) => {
     if (!win) return
     const [x, y] = win.getPosition()
@@ -425,6 +465,13 @@ function stopCursorFeed() {
 // ---------- 生命周期 ----------
 app.whenReady().then(async () => {
   await loadSettings()
+  settings.model = await resolveModelOrPick()
+  if (!settings.model) {
+    dialog.showErrorBox('缺少模型', '没有找到 Live2D 模型。请重新打开程序并选择 大肥鱼.model3.json（模型不随发布包分发）。')
+    app.quit()
+    return
+  }
+  await saveSettings()
   srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
   await writeEndpoint()
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)

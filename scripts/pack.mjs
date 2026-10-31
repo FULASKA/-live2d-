@@ -8,18 +8,20 @@
 //   2. 不要先拷到中转目录再打包：依赖遍历器（flora-colossus）在「带 node_modules 的外置目录」上
 //      解析不到自己的包，会报 Failed to locate module。直接在根目录打最稳。
 //   3. 打完必须自检关键 vendor 文件在不在（见 assertVendor），别让黑窗口流到桌面。
-import { rm, stat, access } from 'node:fs/promises'
+import { rm, stat, access, cp } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { packager } from '@electron/packager'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = path.join(ROOT, 'dist')
-const APP_NAME = 'Live2DStage'
+const APP_NAME = '大肥鱼Live2d桌宠'
+// 完整版内置模型；发布版不含模型（原作者禁止二次分发）
+const MODEL_SRC = process.env.STAGE_MODEL_SRC || 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek'
 const ELECTRON_VERSION = '33.4.11'
 
 // 仓库根下这些目录不打进应用；node_modules 里的同名段落一律保留
-const ROOT_ONLY_SKIP = new Set(['tmp', 'dist', 'harness', 'docs', '.git', '.agent-presets'])
+const ROOT_ONLY_SKIP = new Set(['tmp', 'dist', 'harness', 'docs', 'release', '.git', '.agent-presets'])
 
 // packager 传进来的是「相对仓库根、带前导 / 的 posix 路径」，如 /node_modules/pixi.js/dist/pixi.mjs
 const ignore = (rel) => {
@@ -59,7 +61,7 @@ async function main() {
     electronVersion: ELECTRON_VERSION,
     electronZipDir: path.join(ROOT, 'tmp'),
     asar: false,
-    prune: false,
+    prune: false,  // 下面手动删开发依赖：prune 在这个仓库上会失败，反而更大
     ignore,
   })
 
@@ -80,7 +82,24 @@ async function main() {
   }
 
   console.log(`\n[pack] 自检通过（${VENDOR.length} 个关键文件齐）`)
-  console.log(`[pack] 完成：${path.join(appDir, `${APP_NAME}.exe`)}`)
+  // 删掉只在开发期用的依赖（electron 本体 ~230MB、packager、puppeteer）
+  for (const d of ['electron', '@electron', 'puppeteer-core', 'puppeteer', '@puppeteer', '.bin']) {
+    await rm(path.join(appRoot, 'node_modules', d), { recursive: true, force: true })
+  }
+  console.log(`[pack] 完整版：${path.join(appDir, `${APP_NAME}.exe`)}`)
+
+  // ① 完整版内置模型
+  try {
+    await cp(MODEL_SRC, path.join(appRoot, 'model'), { recursive: true })
+    console.log('[pack] 已内置模型 →', path.join(appRoot, 'model'))
+  } catch (e) { console.warn('[pack] 模型拷贝失败：', e.message) }
+
+  // ② 发布版：复制整包后删掉模型目录
+  const pubDir = path.join(OUT, `${APP_NAME}-发布版-win32-x64`)
+  await rm(pubDir, { recursive: true, force: true })
+  await cp(appDir, pubDir, { recursive: true })
+  await rm(path.join(pubDir, 'resources', 'app', 'model'), { recursive: true, force: true })
+  console.log(`[pack] 发布版（不含模型）：${path.join(pubDir, `${APP_NAME}.exe`)}`)
 }
 
 main().catch((e) => {

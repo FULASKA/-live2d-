@@ -137,6 +137,11 @@ function wire() {
   $('#click-through').onchange = (e) => pushSettings({ clickThrough: !!e.target.checked })
   $('#auto-start').onchange = (e) => pushSettings({ autoStart: !!e.target.checked })
 
+  $('#choose-model').onclick = async () => {
+    status('正在打开选择框…')
+    const r = await shell.chooseModel?.()
+    if (r?.ok) status('已切换模型，重启中…')
+  }
   $('#open-editor').onclick = () => shell.openEditor?.()
   $('#patch-export').onclick = async () => {
     const v = await rpc('patchExport')

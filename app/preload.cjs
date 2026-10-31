@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('shell', {
 
   // ---- 舞台窗口的指令通道（设置窗口用它改反应、读快照、导出补丁）----
   stageRpc: (op, payload) => ipcRenderer.invoke('stage:rpc', op, payload),
+  chooseModel: () => ipcRenderer.invoke('model:choose'),
 
   // ---- 窗口搬运 / 尺寸 / 轮廓 ----
   dragBegin: () => ipcRenderer.send('win:drag-begin'),
