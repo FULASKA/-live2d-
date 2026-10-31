@@ -81,6 +81,8 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
 
   return {
     apply,
+    /** 外部指令接管气泡时，把状态联动的「几秒后自动收起」取消掉 */
+    cancelHide() { clearTimeout(hideTimer) },
     /** 关掉联动（设置里可做开关；关掉后不再动表情，气泡也不弹） */
     setEnabled(v) {
       enabled = !!v

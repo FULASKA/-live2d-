@@ -106,6 +106,137 @@ function bootPerfOverlay() {
   })
 }
 
+// ---------- 控制总线：agent / 脚本 → 舞台，舞台 → agent ----------
+// 下行：SSE /api/events 收动作；上行：POST /api/feedback 报互动、POST /api/snapshot 报状态。
+// 舞台不认「agent 是谁」——DSH 插件、命令行、别的脚本走同一个入口。
+const BUS_HOLD_MS = 2500
+
+function postJSON(url, body, token) {
+  try {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-stage-token': token },
+      body: JSON.stringify(body),
+    }).catch(() => null)
+  } catch { return null }
+}
+
+/** 上行反馈：只报「真的发生了什么」，悬停/移动不刷日志 */
+function emitFeedback(ev, token) {
+  if (!token) return
+  postJSON('/api/feedback', ev, token)
+}
+
+/** 下行动作：kind 见 docs/PROTOCOL.md。改这里 = 扩协议，记得同步文档。 */
+function applyAction(msg) {
+  const a = msg.action || {}
+  const action = String(a.action || a.kind || '')
+  const fade = Number(msg.fade ?? a.fade ?? 0.3)
+  const agent = state.settings?.token
+  switch (action) {
+    case 'say': {
+      const text = String(a.text ?? '')
+      if (!text || !state.bubble) break
+      state.bubble.show(text, { state: a.state || 'idle' })
+      state.agentLink?.cancelHide?.()
+      const ms = Number(a.ms ?? 0)
+      // 显式指令优先于「工作状态」气泡：否则 DSH 状态轮询两秒后就把这句话盖掉
+      state.busOwnUntil = performance.now() + Math.max(ms, 2500)
+      if (ms > 0) setTimeout(() => { if (state.bubble?.text === text) state.bubble.hide() }, ms)
+      break
+    }
+    case 'expression': {
+      const name = a.name ? String(a.name) : ''
+      state.layers?.removeSource('bus')
+      if (!name) break
+      const def = (state.caps.expressions || []).find((e) => e.name === name)
+      if (!def) { console.warn('[bus] 没有这个表情:', name); break }
+      state.layers?.addExpression(name, def.params, { source: 'bus', fade })
+      break
+    }
+    case 'pose': {
+      if (!a.name) { state.poses?.release(Number(fade) * 1000 || 240); break }
+      state.poses?.set(String(a.name), Number(a.ms) || 320)
+      break
+    }
+    case 'look': {
+      // 临时接管视线：hold 结束前不再跟鼠标（否则下一帧就被桌面坐标盖掉）
+      state.agentLookUntil = performance.now() + (Number(a.ms) || BUS_HOLD_MS)
+      state.gaze?.setTarget(Number(a.x ?? 0), Number(a.y ?? 0))
+      break
+    }
+    case 'idle': {
+      const mode = String(a.mode || (a.name ? 'play' : 'pause'))
+      if (mode === 'play') state.idle?.trigger(a.name ? String(a.name) : undefined)
+      else if (mode === 'pause') state.idle?.pause(Number(a.ms) || 5000)
+      else if (mode === 'resume') state.idle?.resume?.()
+      break
+    }
+    case 'state': {
+      // 复用 DSH 联动那条路：气泡文案 / 表情 / 小动作的映射都在 agent-link.js
+      state.agentLink?.apply({ state: a.state ?? null, at: Date.now(), task: a.task ?? null })
+      break
+    }
+    case 'stop': {
+      const scope = String(a.scope || 'all')
+      if (scope === 'all' || scope === 'expression') state.layers?.removeSource('bus')
+      if (scope === 'all') { state.poses?.release(); state.bubble?.hide() }
+      break
+    }
+    default: break
+  }
+  // 动作执行完立刻刷新快照 + 打一条回执，agent 侧不用等下一次心跳
+  state.busSnap?.()
+  emitFeedback({ type: 'action-done', gesture: action, detail: msg.id || null, at: null }, agent)
+}
+
+function bootBus() {
+  const token = state.settings?.token
+  const port = state.settings?.port
+  if (!token || !port) {
+    console.warn('[bus] 缺少 token/port：外部控制不可用')
+    return
+  }
+  const snap = () => {
+    if (!state.bubble) return
+    postJSON('/api/snapshot', {
+      model: state.caps?.model?.name || null,
+      agent: state.agentLink?.state() ?? null,
+      bubble: state.bubble.state(),
+      idle: state.idle?.state() ?? null,
+      pose: state.poses?.state() ?? null,
+      // 当前挂着的表情层（source=bus 的是外部指令，agent 的是 DSH 状态）
+      exprs: (state.layers?.inspect?.()?.layers || []).map((l) => `${l.source}:${l.name}`),
+      look: state.agentLookUntil > performance.now() ? 'agent' : 'cursor',
+    }, token)
+  }
+  state.seenActions = state.seenActions || new Set()
+  const handle = (msg) => {
+    if (!msg || msg.type !== 'action') return
+    if (msg.id) {
+      if (state.seenActions.has(msg.id)) return
+      state.seenActions.add(msg.id)
+      if (state.seenActions.size > 120) state.seenActions.delete(state.seenActions.values().next().value)
+    }
+    try { applyAction(msg) } catch (err) { console.warn('[bus] 动作失败', err) }
+  }
+  try {
+    const es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`)
+    es.onmessage = (e) => {
+      let msg = null
+      try { msg = JSON.parse(e.data) } catch { return }
+      // hello 带回连接的最近动作（页面刚重载也能补齐）
+      if (msg.type === 'hello') { for (const a of msg.actions || []) handle({ ...a, type: 'action' }); return }
+      handle(msg)
+    }
+    es.onerror = () => { /* 服务端 retry:2000，EventSource 自己重连 */ }
+    state.bus = es
+  } catch (e) { console.warn('[bus] 连接失败', e) }
+  state.busSnap = snap
+  snap()
+  state.busTimer = setInterval(snap, 4000)
+}
+
 async function main() {
   try {
     state.settings = await shell.get()
@@ -131,7 +262,11 @@ async function main() {
       poses: state.poses,
       life: state.life,
     })
-    shell.onAgentStatus?.((snap) => state.agentLink?.apply(snap))
+    shell.onAgentStatus?.((snap) => {
+      // 外部指令刚说过的台词有优先权（时长见 applyAction 的 say）
+      if (performance.now() < (state.busOwnUntil || 0)) return
+      state.agentLink?.apply(snap)
+    })
     bindSettings()
     bindTools()
     bindWindowDrag()
@@ -139,6 +274,7 @@ async function main() {
     bindWheelZoom()
     bindPassThrough()
     bootPerfOverlay()
+    bootBus()
     document.title = `stage · ${state.caps.model.name}`
   } catch (e) {
     console.error(e)
@@ -296,6 +432,7 @@ async function bootStage() {
       const st = b.state?.()
       if (st?.visible && st.state && st.state !== 'idle') return
       b.show(text, { state: 'idle' })
+      emitFeedback({ type: 'idle-line', detail: text }, state.settings?.token)
       clearTimeout(idleLineTimer)
       idleLineTimer = setTimeout(() => { if (b.state?.().state === 'idle') b.hide() }, ms)
     },
@@ -404,6 +541,8 @@ async function bootStage() {
   // 窗口坐标为「客户端像素」，窗口外的点会是负数/越界值，正是我们要的方向。
   // 参考半径按「半个屏幕」给，所以鼠标跑到窗口外、桌面任何角落都有明确方向感。
   const lookFromClient = (cx, cy) => {
+    // agent 正在指定视线（look 动作）时不抢镜，hold 到期自动交还鼠标
+    if (performance.now() < (state.agentLookUntil || 0)) return
     const r = stage.canvas.getBoundingClientRect()
     const sw = stage.app.screen.width, sh = stage.app.screen.height
     const dpr = sw / Math.max(1, r.width)
@@ -593,6 +732,17 @@ function bootRegions() {
     },
     onEvent: (ev) => {
       const name = ev.region?.name
+      // 上行反馈：真正发生的互动（点 / 摸第一步 / 拖）才报，避免移动刷屏
+      if (ev.type === 'tap' || (ev.type === 'pet' && ev.step === 1) || ev.type === 'dragStart' || ev.type === 'dragEnd') {
+        const p = ev.point || {}
+        emitFeedback({
+          type: 'interaction',
+          region: name || null,
+          gesture: ev.type === 'tap' ? 'click' : ev.type === 'dragStart' || ev.type === 'dragEnd' ? 'drag' : 'pet',
+          detail: ev.type === 'pet' ? `step ${ev.step}` : null,
+          at: { x: Math.round(p.x ?? 0), y: Math.round(p.y ?? 0) },
+        }, state.settings?.token)
+      }
       const isHand = name === '左手' || name === '右手'
       // 一互动就让待机动作让位：不然她自己在换重心，人会误以为是「不听使唤」。
       // 只认真正的接触（按下 / 抚摸 / 拖拽），hover 不算 —— 鼠标停在角色身上不该冻结待机。
@@ -1349,6 +1499,8 @@ function installProbes({ motionState } = {}) {
   window.__pass = {
     bodyAt,
     refreshMask,
+    // 表情/姿势层现状（排查「动作被谁盖了」用）
+    layers: () => state.layers?.inspect?.() ?? null,
     sway: (name) => state.petSway?.trigger(name),
     charRight: () => Math.round(charRightClient()),
     face: () => state.facePinch?.state() ?? null,

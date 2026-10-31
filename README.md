@@ -3,7 +3,8 @@
 协作工作台的角色演出层。**只负责角色**：透明窗口、双路动作控制、分区互动、自制关键帧动画。
 DSH 只拉起它并转发状态，界面本体不嵌在 DSH 页面里。
 
-> 当前状态：**接口骨架 + 可验证演示**（v0.1.0-dev）。还没有做正式插件、没有 Electron 壳。
+> 当前状态：**v0.1.0-dev**。Electron 壳、双向控制总线（动作下发 + 互动反馈）已可用；
+> 还没做 DSH 侧的正式插件（目前用 CLI 与状态文件联动）。
 
 ## 渲染内核
 
@@ -34,8 +35,10 @@ DSH 只拉起它并转发状态，界面本体不嵌在 DSH 页面里。
 | 尾巴差集 | ✅ | 尾巴凸包与身体五段求差，交集挖成洞（`holes`），命中与绘制都不与其它热区重叠 |
 | 透明处穿透 | ✅ | 热区覆盖但像素 `alpha=0` → 判为未命中（点背景不触发反馈） |
 | 透明背景 | ✅ | 画布 `backgroundAlpha:0`，透明格可透出 |
-| 双路指令 | ✅ | `POST /api/action` 接受 agent/script 指令并回执 |
-| 权限 | ✅ | 无 token → 401 |
+| 双路指令 | ✅ | `POST /api/action` 下发后页面真实执行（say/表达式/姿势/视线/待机/状态） |
+| 互动反馈 | ✅ | 点头 → `feedback.jsonl` 记录 `{region:"头",gesture:"click",point:{…}}` |
+| 状态快照 | ✅ | `GET /api/state` 查到气泡文字、当前待机动作、表情层、视线归属 |
+| 权限 | ✅ | 写接口无 token → 401 |
 
 ## 跑起来
 
@@ -110,6 +113,10 @@ npm run pack     # 打便携版：dist/Live2DStage-win32-x64/Live2DStage.exe（�
 - 按在角色分区上 = 互动，不会误拖窗口
 - `Ctrl+Alt+L` 切换穿透（穿透时角色不可点，舞台里的「恢复鼠标」浮标仍可点）；`Ctrl+Alt+Q` 退出
 - 设置保存在 `%APPDATA%/live2d-stage/settings.json`（角色大小/跟随/增益/气泡/置顶），重启保留
+- **agent 双向控制**：舞台启动后把「端口 + token」写到 `~/.dsh/live2d/endpoint.json`，
+  任何本机进程都能用 HTTP 控制她说话、换表情、切姿势、指视线、演待机动作；
+  反过来，点/摸/拖与「动作已执行」会追加到 `~/.dsh/live2d/feedback.jsonl`，agent 读文件即可接手。
+  自带命令行：`node tools/stage-cli.mjs say 我回来啦 --ms 3000`（详见 `docs/PROTOCOL.md`）
 - 「验证台」按钮用默认浏览器打开 `/harness/`（调试面板还在那里）
 
 打包注意：
@@ -123,9 +130,10 @@ npm run pack     # 打便携版：dist/Live2DStage-win32-x64/Live2DStage.exe（�
 
 ```
 app/                  Electron 应用壳：透明覆盖层 / 设置窗口 / 动作编辑器 / 穿透与找回
-src/server/           静态服务 + 能力清单 + ActionBus（开发服务器与应用壳共用）
+src/server/           静态服务 + 能力清单 + ActionBus + SSE + 反馈日志（开发服务器与应用壳共用）
+tools/stage-cli.mjs   agent/脚本用命令行：say / expr / pose / look / idle / state / feedback
 docs/SPEC.md          设计决议（窗口 A/B 绑定、冲突分层、区域、档案、许可、渲染内核）
-docs/PROTOCOL.md      接口契约 v0（DSH ↔ Stage）
+docs/PROTOCOL.md      接口契约 v1（下行动作 / 上行反馈 / SSE / 快照）
 src/contracts.ts      契约类型
 src/stage/engine.js   渲染内核适配层（唯一直接碰内核的文件）
 src/stage/layers.js   L2 表情叠加 / L5 受控参数 / 部件覆盖

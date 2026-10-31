@@ -112,6 +112,24 @@ async function createWindow() {
 // 插件（dsh-live2d-bridge）在 DSH 侧监听 session/event，原子写 ~/.dsh/live2d/status.json；
 // 这里只做「文件变了就转发」，不解析业务、不阻塞界面。文件不在 = DSH 侧没装插件，舞台按空闲处理。
 const AGENT_STATUS_FILE = path.join(app.getPath('home'), '.dsh', 'live2d', 'status.json')
+
+// 外部控制入口的发现文件：端口随机、token 只有主进程知道，agent/CLI 从这里读。
+// 不做「退出即删」—— 留下的旧端口比消失的文件更容易被排查（连不上就能判断没开）。
+const ENDPOINT_FILE = path.join(app.getPath('home'), '.dsh', 'live2d', 'endpoint.json')
+async function writeEndpoint() {
+  try {
+    await mkdir(path.dirname(ENDPOINT_FILE), { recursive: true })
+    await writeFile(ENDPOINT_FILE, JSON.stringify({
+      url: srv.url,
+      port: srv.port,
+      token,
+      pid: process.pid,
+      model: settings.model,
+      protocol: 1,
+      at: Date.now(),
+    }, null, 2))
+  } catch (e) { console.warn('[endpoint] 写入失败', e?.message || e) }
+}
 function startAgentStatusFeed(target) {
   let lastSig = ''
   let lastAt = 0
@@ -345,6 +363,7 @@ function stopCursorFeed() {
 app.whenReady().then(async () => {
   await loadSettings()
   srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
+  await writeEndpoint()
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)
   wireIpc()
   wireFit()

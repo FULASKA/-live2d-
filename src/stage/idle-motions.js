@@ -137,6 +137,11 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, options
     if (cur && cur.t > cur.ms * 0.5) cur = null
   }
 
+  /** 解除让位（外部控制用；不再等满 pause 窗口） */
+  function resume() {
+    pausedUntil = 0
+  }
+
   function trigger(name) {
     const names = Object.keys(ROUTINES)
     const pick = name && ROUTINES[name] ? name : names.filter((n) => n !== last)[Math.floor(Math.random() * (names.length - 1))]
@@ -195,7 +200,7 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, options
   }
 
   return {
-    apply, trigger, pause,
+    apply, trigger, pause, resume,
     routines: () => Object.keys(ROUTINES),
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
