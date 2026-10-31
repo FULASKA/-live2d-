@@ -26,6 +26,8 @@ const DEFAULTS = {
   strength: 1,
   headGain: 1.25,   // 转头幅度（ParamAngleX/Y 的增益倍数），设置窗口可调
   petGain: 1.6,
+  idle: true,        // 待机动作（常驻微摆 + 随机成套动作 + 小台词）
+  idleSpeed: 1,      // 待机频率倍数（越大换动作越勤）
   alwaysOnTop: true,
   clickThrough: false,
   bubble: true,          // 气泡总开关

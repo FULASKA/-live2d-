@@ -162,6 +162,6 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
     get side() { return anchorSide },
     get visible() { return visible },
     get text() { return lastText },
-    state() { return { visible, text: lastText, w: el.offsetWidth, h: el.offsetHeight, fs: parseFloat(el.style.fontSize) || 0, scroll: el.style.overflowY === 'auto' } },
+    state() { return { visible, text: lastText, state: el.dataset.state ?? null, w: el.offsetWidth, h: el.offsetHeight, fs: parseFloat(el.style.fontSize) || 0, scroll: el.style.overflowY === 'auto' } },
   }
 }

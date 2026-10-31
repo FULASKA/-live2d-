@@ -5,6 +5,7 @@ import { createLayerStack } from '../src/stage/layers.js'
 import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
 import { createPoseBus } from '../src/stage/pose-bus.js'
+import { createIdleMotions } from '../src/stage/idle-motions.js'
 import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader, createHandZoneReader } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
@@ -279,6 +280,27 @@ async function bootStage() {
   // 终点姿势：举手 / 竖手指 / 狗尾草（数值取自模型自带的 motion3 末帧），过渡自己补
   state.poses = createPoses({ layers: state.layers })
 
+  // 待机动作：桌面没人互动时自己在动（常驻微摆 + 随机成套动作，部分带小台词）
+  let idleLineTimer = 0
+  state.idle = createIdleMotions({
+    bus: state.poseBus,
+    param: stage.param,
+    life: state.life,
+    idleFaces: state.idleFaces,
+    options: { enabled: state.settings.idle !== false, speed: Number(state.settings.idleSpeed ?? 1) },
+    // 小台词用气泡；正在显示 DSH 状态（thinking/working/…）时不抢话
+    onLine: (text, ms = 4200) => {
+      const b = state.bubble
+      if (!b) return
+      if (state.settings.bubble === false) return
+      const st = b.state?.()
+      if (st?.visible && st.state && st.state !== 'idle') return
+      b.show(text, { state: 'idle' })
+      clearTimeout(idleLineTimer)
+      idleLineTimer = setTimeout(() => { if (b.state?.().state === 'idle') b.hide() }, ms)
+    },
+  })
+
   let lastT = performance.now()
   let frameDt = 1000 / 60
   const motionState = { x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0 }
@@ -342,6 +364,8 @@ async function bootStage() {
       state.facePinch?.applyPosture(frameDt)
       // 脊柱链：胸/腰跟随（喂给物理权重最高的 ParamBodyAngleX/Z）
       state.posture?.apply(frameDt)
+      // 待机动作：常驻微摆 + 随机成套动作（叠加在同一份姿态里）
+      state.idle?.apply(frameDt)
       // 姿态摆好之后，翻译成面捕捉取通道（物理要吃的就是这些）
       state.capture?.apply(frameDt)
     })
@@ -570,6 +594,9 @@ function bootRegions() {
     onEvent: (ev) => {
       const name = ev.region?.name
       const isHand = name === '左手' || name === '右手'
+      // 一互动就让待机动作让位：不然她自己在换重心，人会误以为是「不听使唤」。
+      // 只认真正的接触（按下 / 抚摸 / 拖拽），hover 不算 —— 鼠标停在角色身上不该冻结待机。
+      if (ev.type === 'down' || ev.type === 'pet' || ev.type === 'dragStart') state.idle?.pause?.(2200)
       // 摸胯：黑脸 + 脸红 + 护住（举手手型）+ 右转头低头微缩，气泡说「变态」那套
       if (name === '胯' && ev.type === 'pet' && ev.step === 1) {
         state.poses?.set('护胯', 340, { holdExtras: true })
@@ -1089,6 +1116,7 @@ function applySettings(next) {
   state.gaze?.set({ enabled: state.settings.gaze !== false, strength, headGain: Number(state.settings.headGain ?? 1.25) })
   state.posture?.set({ strength })
   state.petSway?.set({ gain: Number(state.settings.petGain ?? 1.6) })
+  state.idle?.set({ enabled: state.settings.idle !== false, speed: Number(state.settings.idleSpeed ?? 1) })
 
   const bubbleOn = state.settings.bubble !== false
   if (!bubbleOn && state.bubble?.visible) state.bubble.hide()
@@ -1186,6 +1214,10 @@ function installProbes({ motionState } = {}) {
     faceState: () => state.idleFaces?.state() ?? null,
     /** 终点姿势：预设清单 / 切换 / 状态（数值来自模型自带 motion3 末帧） */
     poses: () => state.poses?.presets() ?? [],
+    /** 待机动作：清单 / 立刻播一个（不传名字则随机）/ 状态 */
+    idleList: () => state.idle?.routines() ?? [],
+    idlePlay(name) { return state.idle?.trigger(name) ?? null },
+    idleState: () => state.idle?.state() ?? null,
     pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
     poseState: () => state.poses?.state() ?? null,
     /** 气泡：说一句 / 换文字 / 收起 / 读状态（验证自适应排版用） */

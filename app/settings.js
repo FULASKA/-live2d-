@@ -59,8 +59,11 @@ function paint() {
   setRange('#head-gain', headGain)
   showHeadGain(headGain)
   setRange('#pet-gain', Number(settings.petGain ?? 1.6))
+  setRange('#idle-speed', Number(settings.idleSpeed ?? 1))
+  showIdleSpeed(Number(settings.idleSpeed ?? 1))
 
   setCheck('#gaze', settings.gaze !== false)
+  setCheck('#idle', settings.idle !== false)
   setCheck('#bubble-on', settings.bubble !== false)
   setCheck('#top', !!settings.alwaysOnTop)
   setCheck('#click-through', !!settings.clickThrough)
@@ -77,6 +80,11 @@ function setRange(sel, v) {
 function showHeadGain(g) {
   const el = $('#head-gain-readout')
   if (el) el.textContent = `${Math.round(27 * g)}°`
+}
+/** 待机频率读数：换算成「几秒一段动作」更直观（基础 8–18 秒） */
+function showIdleSpeed(s) {
+  const el = $('#idle-speed-readout')
+  if (el) el.textContent = `${Math.round(8 / s)}–${Math.round(18 / s)}s`
 }
 function setCheck(sel, on) {
   const el = $(sel)
@@ -155,6 +163,12 @@ function wire() {
   }
   $('#pet-gain').oninput = (e) => pushSettingsSoon({ petGain: Number(e.target.value) })
   $('#gaze').onchange = (e) => pushSettings({ gaze: !!e.target.checked })
+  $('#idle').onchange = (e) => pushSettings({ idle: !!e.target.checked })
+  $('#idle-speed').oninput = (e) => {
+    const s = Number(e.target.value)
+    showIdleSpeed(s)
+    pushSettingsSoon({ idleSpeed: s })
+  }
   $('#bubble-on').onchange = (e) => pushSettings({ bubble: !!e.target.checked })
   $('#bubble-side').onchange = (e) => pushSettings({ bubbleSide: e.target.value === 'left' ? 'left' : 'right' })
   $('#top').onchange = (e) => pushSettings({ alwaysOnTop: !!e.target.checked })
