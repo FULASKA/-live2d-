@@ -88,6 +88,9 @@ async function main() {
   }
   console.log(`[pack] 完整版：${path.join(appDir, `${APP_NAME}.exe`)}`)
 
+  // 把「挂载模型.cmd」放到 exe 旁边（用户可直接拖模型上去）
+  try { await cp(path.join(ROOT, '挂载模型.cmd'), path.join(appDir, '挂载模型.cmd')) } catch {}
+
   // ① 完整版内置模型
   try {
     await cp(MODEL_SRC, path.join(appRoot, 'model'), { recursive: true })

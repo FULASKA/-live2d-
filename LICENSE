@@ -1,0 +1,31 @@
+MIT License
+
+Copyright (c) 2026 大肥鱼 Live2D 桌宠 Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+注意 / Notice：
+
+1. 本许可证只覆盖本仓库的**代码**。
+2. 大肥鱼 Live2D 模型（.model3.json / .moc3 / 贴图等）版权归原作者所有，
+   **不包含在本仓库中，也禁止二次发布/分发**。使用者需自行从原作者处获取模型。
+3. Live2D Cubism Core（`live2dcubismcore.min.js`）是 Live2D Inc. 的专有软件，
+   仅在本地构建时放入 `vendor/`（已被 .gitignore 排除），不随本仓库分发。

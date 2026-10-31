@@ -9,12 +9,12 @@ import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen, dialog } fr
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 便携/测试：STAGE_HOME 覆盖用户数据目录（设置文件跟着走，可做干净环境）
-if (process.env.STAGE_HOME) { try { app.setPath('userData', process.env.STAGE_HOME) } catch {} }
+if (process.env.STAGE_HOME) { try { mkdirSync(process.env.STAGE_HOME, { recursive: true }); app.setPath('userData', process.env.STAGE_HOME) } catch {} }
 // 启动参数：--model "路径\model3.json"（自动化安装 / 快捷方式用）
 const ARG_MODEL = (() => { const i = process.argv.indexOf('--model'); return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : null })()
 const DEV_MODEL = 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大肥鱼.model3.json'
@@ -71,6 +71,11 @@ let settings = { ...DEFAULTS }
 let win = null
 let srv = null
 let token = 'local-app'
+
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) { app.quit() } else {
+  app.on('second-instance', () => { try { if (win) { win.show(); win.focus() } } catch {} })
+}
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json')
 

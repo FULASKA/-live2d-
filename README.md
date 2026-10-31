@@ -195,3 +195,9 @@ harness/              验证台：能力清单 / 动作下发 / 参数受控 / �
 - 依赖 `pixi.js`、`untitled-pixi-live2d-engine` 均为 MIT，可随代码分发。
 - 发布插件时的首次启动引导：导入模型 + 下载 Core。商业化需另评估 Live2D publication license 与模型作者授权。
 - 署名（合规使用模型时）：原画/拆分 神宫凉子，Live2D 建模 霓虹猫_NeonNeko。
+
+## 许可
+
+- 代码：MIT（见 `LICENSE`）
+- 大肥鱼模型：版权归原作者所有，**不随仓库分发、禁止二次发布**
+- Live2D Cubism Core：Live2D Inc. 专有软件，仅本地构建使用（`vendor/` 已忽略）

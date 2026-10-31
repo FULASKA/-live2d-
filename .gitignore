@@ -1,11 +1,23 @@
+# 依赖与构建产物
 node_modules/
 dist/
-vendor/
-models/
 tmp/
+release/
+
+# 本地配置 / 日志
 *.log
 .env
 .DS_Store
 
-# 发布产物（zip 太大，不进仓库）
-release/*.zip
+# 模型资产：版权归原作者，禁止二次分发，绝不进仓库
+model/
+models/
+*.model3.json
+*.moc3
+*.physics3.json
+*.cdi3.json
+*.4096
+*.4096.png
+
+# Live2D Cubism Core（专有二进制，仅本地构建）
+vendor/
