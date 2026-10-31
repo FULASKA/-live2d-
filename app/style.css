@@ -87,11 +87,14 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 #bubble::after { width: calc(7px * var(--bs)); height: calc(7px * var(--bs)); border-width: calc(2px * var(--bs)); }
 #bubble[data-anchor="right"][data-side="above"]::before { left: calc(18px * var(--bs)); bottom: calc(-18px * var(--bs)); }
 #bubble[data-anchor="right"][data-side="above"]::after { left: calc(9px * var(--bs)); bottom: calc(-32px * var(--bs)); }
-/* 居中锚点（贴角/居中挂在头顶）：点点放在正下方、落在「框与头之间」的缝里 */
+/* 贴角模式（默认）：点点贴气泡框的**左下角**（选左侧时镜像到右下角） */
+#bubble[data-anchor="corner-right"][data-side="above"]::before { left: calc(16px * var(--bs)); bottom: calc(-16px * var(--bs)); }
+#bubble[data-anchor="corner-right"][data-side="above"]::after { left: calc(6px * var(--bs)); bottom: calc(-28px * var(--bs)); }
+#bubble[data-anchor="corner-left"][data-side="above"]::before { right: calc(16px * var(--bs)); bottom: calc(-16px * var(--bs)); }
+#bubble[data-anchor="corner-left"][data-side="above"]::after { right: calc(6px * var(--bs)); bottom: calc(-28px * var(--bs)); }
+/* 兜底居中挂在头顶：点点放在正下方、落在「框与头之间」的缝里 */
 #bubble[data-anchor="center"][data-side="above"]::before { left: 50%; margin-left: calc(-6px * var(--bs)); bottom: calc(-16px * var(--bs)); }
 #bubble[data-anchor="center"][data-side="above"]::after { left: 50%; margin-left: calc(-3.5px * var(--bs)); bottom: calc(-28px * var(--bs)); }
-#bubble[data-anchor="center"][data-side="below"]::before { left: 50%; margin-left: calc(-6px * var(--bs)); top: calc(-16px * var(--bs)); }
-#bubble[data-anchor="center"][data-side="below"]::after { left: 50%; margin-left: calc(-3.5px * var(--bs)); top: calc(-28px * var(--bs)); }
 #bubble[data-anchor="left"][data-side="above"]::before { right: calc(18px * var(--bs)); bottom: calc(-18px * var(--bs)); }
 #bubble[data-anchor="left"][data-side="above"]::after { right: calc(9px * var(--bs)); bottom: calc(-32px * var(--bs)); }
 #bubble[data-side="below"]::before { top: calc(-18px * var(--bs)); }
