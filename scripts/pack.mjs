@@ -91,16 +91,17 @@ async function main() {
   // 把「挂载模型.cmd」放到 exe 旁边（用户可直接拖模型上去）
   try { await cp(path.join(ROOT, '挂载模型.cmd'), path.join(appDir, '挂载模型.cmd')) } catch {}
 
-  // ① 完整版内置模型
+  // ① 完整版内置模型：放在 exe 旁边的 model/（相对路径，用户可直接替换/管理）
   try {
-    await cp(MODEL_SRC, path.join(appRoot, 'model'), { recursive: true })
-    console.log('[pack] 已内置模型 →', path.join(appRoot, 'model'))
+    await cp(MODEL_SRC, path.join(appDir, 'model'), { recursive: true })
+    console.log('[pack] 已内置模型 →', path.join(appDir, 'model'))
   } catch (e) { console.warn('[pack] 模型拷贝失败：', e.message) }
 
   // ② 发布版：复制整包后删掉模型目录
   const pubDir = path.join(OUT, `${APP_NAME}-发布版-win32-x64`)
   await rm(pubDir, { recursive: true, force: true })
   await cp(appDir, pubDir, { recursive: true })
+  await rm(path.join(pubDir, 'model'), { recursive: true, force: true })
   await rm(path.join(pubDir, 'resources', 'app', 'model'), { recursive: true, force: true })
   console.log(`[pack] 发布版（不含模型）：${path.join(pubDir, `${APP_NAME}.exe`)}`)
 }

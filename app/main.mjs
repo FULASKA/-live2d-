@@ -9,7 +9,7 @@ import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen, dialog } fr
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -18,13 +18,31 @@ if (process.env.STAGE_HOME) { try { mkdirSync(process.env.STAGE_HOME, { recursiv
 // 启动参数：--model "路径\model3.json"（自动化安装 / 快捷方式用）
 const ARG_MODEL = (() => { const i = process.argv.indexOf('--model'); return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : null })()
 const DEV_MODEL = 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大肥鱼.model3.json'
-// 发布包：模型随包放在 resources/app/model/（完整版）或由用户自己选（发布版不带模型）
-const BUNDLED_MODEL = path.join(ROOT, 'model', '大肥鱼.model3.json')
+// 模型目录：放在 exe 旁边的 model/（完整版内置；发布版用户把自己的模型丢进去即可，不用配绝对路径）
+const EXE_DIR = path.dirname(app.getPath('exe'))
+const MODEL_DIRS = [path.join(EXE_DIR, 'model'), path.join(ROOT, 'model')]
 
-/** 解析模型路径：设置 → 包内 model/ → 环境变量 → 开发机内置 */
+/** 目录里挑一个 *.model3.json：优先「大肥鱼」，否则第一个 */
+function pickModelIn(dir) {
+  try {
+    const files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.model3.json')).sort()
+    if (!files.length) return null
+    return path.join(dir, files.find((f) => f.startsWith('大肥鱼')) || files[0])
+  } catch { return null }
+}
+
+/** 设置里的 model：相对路径按 exe 所在目录解析（配置里只存相对路径，换机不用改） */
+function fromSettings() {
+  if (!settings.model) return null
+  const abs = path.isAbsolute(settings.model) ? settings.model : path.resolve(EXE_DIR, settings.model)
+  return existsSync(abs) ? abs : null
+}
+
+/** 解析模型路径：设置 → exe 旁 model/ → 包内 resources/app/model → 环境变量 → 开发机内置 */
 function resolveModel() {
-  if (settings.model && existsSync(settings.model)) return settings.model
-  if (existsSync(BUNDLED_MODEL)) return BUNDLED_MODEL
+  const fromCfg = fromSettings()
+  if (fromCfg) return fromCfg
+  for (const dir of MODEL_DIRS) { const f = pickModelIn(dir); if (f) return f }
   if (process.env.STAGE_MODEL && existsSync(process.env.STAGE_MODEL)) return process.env.STAGE_MODEL
   if (existsSync(DEV_MODEL)) return DEV_MODEL
   return null
@@ -88,7 +106,13 @@ async function loadSettings() {
 async function saveSettings() {
   try {
     await mkdir(path.dirname(settingsFile()), { recursive: true })
-    await writeFile(settingsFile(), JSON.stringify(settings, null, 2))
+    // 模型路径：在 exe 目录内就存相对路径（打包后换目录/换机不用改配置）
+    const out = { ...settings }
+    if (out.model) {
+      const rel = path.relative(EXE_DIR, out.model)
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) out.model = rel.replace(/\\/g, '/')
+    }
+    await writeFile(settingsFile(), JSON.stringify(out, null, 2), 'utf8')
   } catch (e) { console.error('[settings] 保存失败', e) }
 }
 

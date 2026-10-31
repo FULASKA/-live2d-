@@ -68,11 +68,24 @@ mkdirSync(home, { recursive: true })
 const file = path.join(home, 'settings.json')
 let settings = {}
 try { settings = JSON.parse(readFileSync(file, 'utf8')) } catch {}
-settings.model = model
-writeFileSync(file, JSON.stringify(settings, null, 2))
+
+// 模型在 exe 旁边的 model/ 里时只存相对路径（换目录/换机不用改配置），其余情况存绝对路径
+const EXE_DIR = path.dirname(process.execPath)
+const rel = path.relative(EXE_DIR, model)
+const stored = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.replace(/\\/g, '/') : model
+settings.model = stored
+writeFileSync(file, JSON.stringify(settings, null, 2), 'utf8')
+
+// 回读校验：配置里存的路径必须能解析回模型文件（防编码损坏把中文写坏）
+const back = JSON.parse(readFileSync(file, 'utf8')).model
+const backAbs = path.isAbsolute(back) ? back : path.resolve(EXE_DIR, back)
+if (path.resolve(backAbs) !== path.resolve(model)) {
+  console.error(`[mount] 写入校验失败：${file} 里的路径解析不回模型文件（可能是编码问题）`)
+  process.exit(1)
+}
 
 console.log(`[mount] 模型：${model}`)
-console.log(`[mount] 配置：${file}`)
+console.log(`[mount] 配置：${file}（记录为 ${back}）`)
 if (v.missing?.length) {
   console.warn(`[mount] 警告：缺少 ${v.missing.length} 个引用文件，角色可能显示不全：`)
   for (const m of v.missing.slice(0, 10)) console.warn('  - ' + m)

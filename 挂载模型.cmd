@@ -1,18 +1,25 @@
 @echo off
-chcp 65001 >nul
+chcp 936 >nul
 setlocal
 set ELECTRON_RUN_AS_NODE=1
+rem ÓÃÍ¨ÅäÕÒ exe£¬±ÜÃâÔÚÅú´¦ÀíÀïĞ´ÖĞÎÄ×ÖÃæÁ¿£¨GBK/UTF-8 »ìÂë»á±äÂÒÂëÂ·¾¶£©
+for %%x in ("%~dp0*.exe") do set "APP=%%~fx"
+if not defined APP (
+  echo [ERROR] ÕÒ²»µ½ exe£¬Çë°Ñ±¾ÎÄ¼ş·ÅÔÚ³ÌĞòÄ¿Â¼ÀïÔÙÔËĞĞ¡£
+  pause
+  exit /b 2
+)
 set "MODEL=%~1"
 set "HOME_DIR=%~2"
-
-if "%MODEL%"=="" set /p MODEL=æŠŠ å¤§è‚¥é±¼.model3.json æ‹–è¿›æ¥ï¼ˆæˆ–è¾“å…¥å®Œæ•´è·¯å¾„ï¼‰åå›è½¦ï¼š
+if "%MODEL%"=="" set /p MODEL=°Ñ xxx.model3.json ÍÏ½øÀ´£¨»òÊäÈëÍêÕûÂ·¾¶£©ºó»Ø³µ£º
+if "%MODEL%"=="" exit /b 2
 
 if not "%HOME_DIR%"=="" (
-  "%~dp0å¤§è‚¥é±¼Live2dæ¡Œå® .exe" "%~dp0resources\app\tools\mount-model.mjs" "%MODEL%" --home "%HOME_DIR%"
+  "%APP%" "%~dp0resources\app\tools\mount-model.mjs" "%MODEL%" --home "%HOME_DIR%"
   exit /b %ERRORLEVEL%
 )
 
-"%~dp0å¤§è‚¥é±¼Live2dæ¡Œå® .exe" "%~dp0resources\app\tools\mount-model.mjs" "%MODEL%"
+"%APP%" "%~dp0resources\app\tools\mount-model.mjs" "%MODEL%"
 set "RC=%ERRORLEVEL%"
 echo.
 if "%~1"=="" pause
