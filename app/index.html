@@ -16,6 +16,9 @@
 <body>
   <div id="stage"></div>
 
+  <!-- 角色说的话 / DSH 当前在干什么，都走这个气泡 -->
+  <div id="bubble" class="empty"></div>
+
   <!-- 窗口轮廓拖拽：无边框窗口自己画的八个把手（透明处也能抓） -->
   <div class="rz rz-n" data-edge="n"></div>
   <div class="rz rz-s" data-edge="s"></div>
@@ -53,6 +56,16 @@
       <div class="row"><label><input type="checkbox" id="gaze"> 眼 / 头 / 身体跟随鼠标</label></div>
       <div class="row"><input type="range" id="strength" min="0" max="1" step="0.05"></div>
       <div class="row"><label>抚摸晃动增益</label><input type="range" id="pet-gain" min="0" max="3" step="0.1"></div>
+    </section>
+
+    <section>
+      <h3>对话气泡</h3>
+      <div class="row"><label><input type="checkbox" id="bubble-on"> 显示气泡</label></div>
+      <div class="row">
+        <label>挂在头的</label>
+        <select id="bubble-side"><option value="right">右侧</option><option value="left">左侧</option></select>
+      </div>
+      <div class="hint">漫画式：贴着头的右上（或左上）角。字少用大字，字多自动缩字、框变大，撑满就滚动</div>
     </section>
 
     <section>

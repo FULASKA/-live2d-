@@ -14,6 +14,7 @@ import { createIdleFaces } from '../src/stage/idle-faces.js'
 import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
 import { createPoses } from '../src/stage/poses.js'
+import { createBubble } from '../src/stage/bubble.js'
 import { createProfiler } from '../src/stage/perf.js'
 
 const $ = (s) => document.querySelector(s)
@@ -105,6 +106,13 @@ async function main() {
     state.caps = await fetch('/api/capabilities').then((r) => r.json())
     await bootStage()
     bootRegions()
+    // 对话气泡：漫画式挂在头顶右侧（设置里可切左侧），角色移动/换尺寸时跟着走
+    state.bubble = createBubble({
+      el: $('#bubble'),
+      anchor: () => regionScreenBox('头'),
+      side: state.settings.bubbleSide === 'left' ? 'left' : 'right',
+    })
+    setInterval(() => { if (state.bubble?.visible) state.bubble.reposition() }, 250)
     bindPanel()
     bindWindowDrag()
     bindToolsDismiss()
@@ -342,6 +350,16 @@ async function bootStage() {
     poses: () => state.poses?.presets() ?? [],
     pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
     poseState: () => state.poses?.state() ?? null,
+    /** 气泡：说一句 / 换文字 / 收起 / 读状态（验证自适应排版用） */
+    bubble(text, st) {
+      if (!state.bubble) return null
+      if (text == null) { state.bubble.hide(); return null }
+      state.bubble.show(String(text), { state: st })
+      return state.bubble.state()
+    },
+    bubbleHide() { state.bubble?.hide() },
+    bubbleState: () => state.bubble?.state() ?? null,
+    bubbleSide(side) { state.bubble?.setSide(side) },
     /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
     pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
@@ -840,25 +858,8 @@ function bindPassThrough() {
       return { name: r.name, z: r.z, minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) }
     }),
     handCount: () => state.handReader?.count?.() ?? -1,
-    /** 热区 → 客户端像素矩形（调热区位置用；和 faceCenter 同一套换算） */
-    screenBox: (name) => {
-      const r = state.store?.all?.find((x) => x.name === name)
-      if (!r || !r.points?.length) return null
-      const xs = r.points.map((p) => p[0])
-      const ys = r.points.map((p) => p[1])
-      const st = state.stage
-      const cr = st.canvas.getBoundingClientRect()
-      const sc = st.model.scale.x
-      const ms = st.modelSize()
-      const sx = (mx) => cr.left + st.model.position.x + (mx - ms.width / 2) * sc
-      const sy = (my) => cr.top + st.model.position.y + (my - ms.height / 2) * sc
-      return {
-        left: sx(Math.min(...xs)), top: sy(Math.min(...ys)),
-        right: sx(Math.max(...xs)), bottom: sy(Math.max(...ys)),
-        width: (Math.max(...xs) - Math.min(...xs)) * sc,
-        height: (Math.max(...ys) - Math.min(...ys)) * sc,
-      }
-    },
+    /** 热区 → 客户端像素矩形（调热区位置用） */
+    screenBox: (name) => regionScreenBox(name),
     leanState: () => {
       const def = (state.caps?.expressions || []).find((x) => x.name === '前倾')
       const keys = def ? Object.keys(def.params) : []
@@ -1148,8 +1149,29 @@ function regionAtClient(x, y) {
   return state.store.hit(p.x, p.y)
 }
 
-/** 头部右键：前倾做成**开关**（点一次开、再点一次关），不再几秒后自己消失 */
-let leanOn = false
+/**
+ * 热区 → 客户端像素矩形（气泡定位 / 面板联动都用它）。
+ * 换算方式与角色在窗口里的实际位置一致：canvas rect + 模型偏移 + 缩放。
+ */
+function regionScreenBox(name) {
+  const r = state.store?.all?.find((x) => x.name === name)
+  if (!r || !r.points?.length || !state.stage) return null
+  const xs = r.points.map((p) => p[0])
+  const ys = r.points.map((p) => p[1])
+  const cr = state.stage.canvas.getBoundingClientRect()
+  const sc = state.stage.model.scale.x
+  const ms = state.stage.modelSize()
+  const sx = (mx) => cr.left + state.stage.model.position.x + (mx - ms.width / 2) * sc
+  const sy = (my) => cr.top + state.stage.model.position.y + (my - ms.height / 2) * sc
+  return {
+    left: sx(Math.min(...xs)), top: sy(Math.min(...ys)),
+    right: sx(Math.max(...xs)), bottom: sy(Math.max(...ys)),
+    width: (Math.max(...xs) - Math.min(...xs)) * sc,
+    height: (Math.max(...ys) - Math.min(...ys)) * sc,
+  }
+}
+
+/** 头部右键：前倾做成**开关**（点一次开、再点一次关），不再几秒后自己消失 */let leanOn = false
 function toggleLean() {
   const def = (state.caps.expressions || []).find((x) => x.name === '前倾')
   if (!def) { toast('模型没有「前倾」表情'); return }
@@ -1286,6 +1308,28 @@ function bindPanel() {
   $('#strength').value = Number(s.strength ?? 1)
   $('#top').checked = !!s.alwaysOnTop
   $('#click-through').checked = !!s.clickThrough
+  // 气泡：开关 + 挂哪一侧
+  const bubbleOn = $('#bubble-on')
+  const bubbleSide = $('#bubble-side')
+  if (bubbleOn) {
+    bubbleOn.checked = s.bubble !== false
+    bubbleOn.onchange = (e) => {
+      const on = !!e.target.checked
+      state.settings.bubble = on
+      shell.set({ bubble: on })
+      if (!on) state.bubble?.hide()
+      toast(on ? '气泡：开' : '气泡：关')
+    }
+  }
+  if (bubbleSide) {
+    bubbleSide.value = s.bubbleSide === 'left' ? 'left' : 'right'
+    bubbleSide.onchange = (e) => {
+      const side = e.target.value === 'left' ? 'left' : 'right'
+      state.settings.bubbleSide = side
+      shell.set({ bubbleSide: side })
+      state.bubble?.setSide(side)
+    }
+  }
 
   $('#win-center').onclick = () => shell.center()
 

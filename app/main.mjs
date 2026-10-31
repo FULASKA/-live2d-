@@ -27,6 +27,8 @@ const DEFAULTS = {
   petGain: 1.6,
   alwaysOnTop: true,
   clickThrough: false,
+  bubble: true,          // 气泡总开关
+  bubbleSide: 'right',   // 气泡挂在头的哪一侧：right / left
   model: process.env.STAGE_MODEL || DEFAULT_MODEL,
 }
 

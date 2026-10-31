@@ -100,3 +100,58 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 }
 #perf b { color: #8fd0ff; }
 #perf span { display: block; color: #9fb6d6; }
+
+/* ===== 对话气泡 =====
+   尺寸由 bubble.js 算（字号按字数降档、宽度 fit-content、超高转滚动），
+   这里只管长相：浅色纸感 + 与角色同侧的尾巴 + 按状态换边色。 */
+#bubble {
+  position: fixed; z-index: 40; display: block;
+  min-width: 88px; max-width: 72%;
+  padding: 10px 14px; border-radius: 16px;
+  background: rgba(250, 252, 255, 0.97);
+  color: #18213a;
+  border: 1px solid rgba(64, 104, 168, 0.28);
+  box-shadow: 0 10px 26px rgba(8, 18, 38, 0.34);
+  line-height: 1.5; font-weight: 500; letter-spacing: 0.01em;
+  white-space: pre-wrap; word-break: break-word;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0; transform: translateY(5px) scale(0.985);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  scrollbar-width: thin; scrollbar-color: rgba(70, 105, 165, 0.45) transparent;
+}
+#bubble.on { opacity: 1; transform: none; }
+#bubble.empty { display: none; }
+#bubble::-webkit-scrollbar { width: 6px; }
+#bubble::-webkit-scrollbar-thumb { background: rgba(70, 105, 165, 0.4); border-radius: 3px; }
+
+/* 尾巴：两个三角形叠出「实心 + 描边」。挂在头的哪一侧，尾巴就贴那一侧的角 */
+#bubble::before, #bubble::after {
+  content: ""; position: absolute; width: 0; height: 0;
+  border-left: 9px solid transparent; border-right: 9px solid transparent;
+}
+#bubble[data-anchor="right"]::before, #bubble[data-anchor="right"]::after { left: 16px; }
+#bubble[data-anchor="left"]::before, #bubble[data-anchor="left"]::after { right: 16px; }
+#bubble[data-side="above"]::before {
+  bottom: -9px;
+  border-top: 9px solid rgba(64, 104, 168, 0.28);
+}
+#bubble[data-side="above"]::after {
+  bottom: -7px;
+  border-top: 9px solid rgba(250, 252, 255, 0.97);
+}
+#bubble[data-side="below"]::before {
+  top: -9px;
+  border-bottom: 9px solid rgba(64, 104, 168, 0.28);
+}
+#bubble[data-side="below"]::after {
+  top: -7px;
+  border-bottom: 9px solid rgba(250, 252, 255, 0.97);
+}
+
+/* 状态色：不影响文字可读性，只换描边 */
+#bubble[data-state="thinking"] { border-color: rgba(122, 150, 214, 0.55); }
+#bubble[data-state="working"] { border-color: rgba(86, 158, 250, 0.6); }
+#bubble[data-state="waiting"] { border-color: rgba(236, 168, 74, 0.65); }
+#bubble[data-state="success"] { border-color: rgba(96, 190, 132, 0.62); }
+#bubble[data-state="error"] { border-color: rgba(232, 104, 104, 0.68); }
