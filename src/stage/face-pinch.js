@@ -174,6 +174,8 @@ export function createFacePinch({ param, options = {} } = {}) {
       const hy = clamp((push.y / cfg.maxPull) * cfg.headTurn * 0.7, -cfg.maxHeadTurn, cfg.maxHeadTurn)
       add('ParamAngleZ', hz)
       add('ParamAngleY', -hy)
+      // 捏脸也朝手的方向转脸：只歪不转的话，脸被拽住会像贴片
+      add('ParamAngleX', hz * 1.4)
       add('ParamBodyAngleZ', hz * 0.3)
     }
   }

@@ -20,6 +20,7 @@ export function createPetSway({ param, options = {} } = {}) {
     gain: 1,          // 面板滑杆 0..3
     maxAngle: 30,     // 参数满量程角度（ParamAngleX/Y/Z 都是 ±30）
     ratio: 0.5,       // 位移的 50% 转成角度
+    turn: 0.5,        // 顺带朝手的方向**转头**（× amp）：光歪头不转脸，摸起来像块木头
     follow: 14,       // 跟手速度（1/s）
     releasePerSec: 6, // 松手回落速度
     bodyRatio: 0.22,  // 身体跟一点，别整块木头
@@ -80,10 +81,15 @@ export function createPetSway({ param, options = {} } = {}) {
     // 实测方向反了：手往右 → 头也该往右，所以直接取正号（AngleZ 正 = 往左歪）
     const z = clamp(cx * amp, -cfg.maxAngle, cfg.maxAngle)
     const y = clamp(-cy * amp, -cfg.maxAngle, cfg.maxAngle)
-    last = { z: +z.toFixed(2), y: +y.toFixed(2) }
+    // 朝手扭头：摸头时鼠标就在脑袋上，视线目标本来就接近中心（转头量≈0），
+    // 所以这里再补一档「跟着手转过去」，头和身子一起偏，看上去才像真的在蹭手。
+    const x = clamp(cx * amp * cfg.turn, -cfg.maxAngle, cfg.maxAngle)
+    last = { z: +z.toFixed(2), y: +y.toFixed(2), x: +x.toFixed(2) }
+    add('ParamAngleX', x)
     add('ParamAngleZ', z)
     add('ParamAngleY', y)
     add('ParamBodyAngleZ', z * cfg.bodyRatio)
+    add('ParamBodyAngleX', x * cfg.bodyRatio)
   }
 
   return {
