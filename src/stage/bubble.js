@@ -27,6 +27,9 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
   let lastKey = ''
   let hideTimer = 0
   let anchorSide = side === 'left' ? 'left' : 'right'
+  // 与窗口/角色同一比例：窗口变大，气泡的字号、内边距、尾巴一起变大
+  let scale = 1
+  el.style.setProperty('--bs', '1')
 
   const viewport = () => ({ w: window.innerWidth, h: window.innerHeight })
 
@@ -42,20 +45,21 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
    */
   function layout(text) {
     const vp = viewport()
-    const maxH = Math.max(96, vp.h * 0.26)
-    el.style.maxWidth = `${Math.round(Math.min(268, vp.w * 0.62))}px`
+    const maxH = Math.max(96 * scale, vp.h * 0.26)
+    el.style.maxWidth = `${Math.round(Math.min(268 * scale, vp.w * 0.62))}px`
     el.style.maxHeight = `${Math.round(maxH)}px`
 
     const len = Array.from(text).length
-    let fs = fontFor(len)
+    let fs = Math.round(fontFor(len) * scale * 10) / 10
     el.style.fontSize = `${fs}px`
     el.style.overflowY = 'visible'
     el.style.height = 'auto'
 
     // 极长文本兜底（预设短句一般到不了这里）
     let guard = 0
-    while (el.scrollHeight > maxH && fs > 13 && guard++ < 8) {
-      fs -= 1
+    const floor = 13 * scale
+    while (el.scrollHeight > maxH && fs > floor && guard++ < 8) {
+      fs = Math.round((fs - 1) * 10) / 10
       el.style.fontSize = `${fs}px`
     }
     if (el.scrollHeight > maxH) {
@@ -159,6 +163,15 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
       anchorSide = s === 'left' ? 'left' : 'right'
       if (visible) place()
     },
+    /** 与窗口/角色联动的比例（窗口缩放时由 renderer 调用） */
+    setScale(s) {
+      const next = Math.min(2.5, Math.max(0.4, Number(s) || 1))
+      if (Math.abs(next - scale) < 0.002) return
+      scale = next
+      el.style.setProperty('--bs', String(scale))
+      if (visible) { layout(lastText); place() }
+    },
+    get scale() { return scale },
     get side() { return anchorSide },
     get visible() { return visible },
     get text() { return lastText },

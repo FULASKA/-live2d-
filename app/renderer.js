@@ -272,8 +272,10 @@ async function main() {
     bindTools()
     bindWindowDrag()
     bindToolsDismiss()
-    bindWheelZoom()
+    bindFrame()
     bindPassThrough()
+    state.bubble.setScale(bubbleScale())
+    applyBorder(!!state.settings.border)
     bootPerfOverlay()
     bootBus()
     document.title = `stage · ${state.caps.model.name}`
@@ -914,6 +916,8 @@ function createPassThrough() {
   /** 当前指针位置该不该穿透；没坐标时给 null（不改变现状） */
   function decide() {
     if (!pending || !state.settings) return null
+    // 显示窗口边框时整窗接收鼠标：边框把手要能拖，不能把鼠标漏给桌面
+    if (state.borderOn) return false
     const el = document.elementFromPoint(pending.x, pending.y)
     if (el && el.tagName !== 'CANVAS') return false
     if (state.settings.clickThrough) return true
@@ -1099,18 +1103,67 @@ function applyFit(now = false) {
   fitTimer = setTimeout(send, 70)
 }
 
-/** Ctrl + 滚轮（只在角色身上生效）：角色大小与窗口大小一起变 */
-function bindWheelZoom() {
-  window.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey) return
-    if (!bodyAt(e.clientX, e.clientY)) return
-    e.preventDefault()
-    const cur = Number(state.settings?.zoom) || 1
-    const next = Math.min(FIT_MAX, Math.max(FIT_MIN, cur * (e.deltaY < 0 ? 1.06 : 1 / 1.06)))
-    if (Math.abs(next - cur) < 1e-4) return
-    shell.set({ zoom: next }) // 主进程存盘并广播 → applySettings → applyFit
-    toast(`角色大小 ${Math.round(next * 100)}%`, 900)
-  }, { passive: false })
+// ---------- 窗口边框 / 等比缩放 ----------
+// 窗口、角色、气泡共用同一比例：窗口高 = 模型高 × (540/宽) × (1+PAD) × zoom，
+// 所以「当前 zoom」可以直接由窗口高度反推。拖边框改的是窗口尺寸，三者一起变。
+// 气泡比例除以基准 0.8，让默认大小和旧版视觉一致。
+const UI_BASE_ZOOM = 0.8
+
+function refWindowHeight() {
+  const ms = state.stage?.modelSize?.()
+  if (!ms?.width || !ms?.height) return null
+  return ms.height * (FIT_BASE_W / ms.width) * (1 + FIT_PAD_Y)
+}
+function zoomFromWindow() {
+  const ref = refWindowHeight()
+  if (!ref) return Number(state.settings?.zoom) || 1
+  return window.innerHeight / ref
+}
+function bubbleScale() {
+  return Math.max(0.4, Math.min(2.5, zoomFromWindow() / UI_BASE_ZOOM))
+}
+
+function applyBorder(on) {
+  state.borderOn = !!on
+  $('#frame')?.classList.toggle('hidden', !on)
+  if (on) {
+    // 边框要能接鼠标：这期间不做「透明处穿透」
+    state.ignoring = false
+    shell.setPassThrough?.(false)
+  }
+  state.recomputePass?.()
+}
+
+function endScale() {
+  if (!state.scaleEdge) return
+  state.scaleEdge = null
+  shell.scaleEnd?.()
+  const z = Math.max(0.2, Math.min(3, Math.round(zoomFromWindow() * 1000) / 1000))
+  if (Math.abs(z - (Number(state.settings?.zoom) || 1)) > 0.002) shell.set?.({ zoom: z })
+}
+
+function bindFrame() {
+  const f = $('#frame')
+  if (!f) return
+  const edges = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se']
+  f.innerHTML = edges.map((e) => `<div class="fh ${e}" data-edge="${e}"></div>`).join('')
+  for (const h of f.querySelectorAll('.fh')) {
+    h.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      state.scaleEdge = h.dataset.edge
+      shell.scaleBegin?.(state.scaleEdge)
+      try { h.setPointerCapture(e.pointerId) } catch {}
+    })
+  }
+  window.addEventListener('pointerup', endScale)
+  window.addEventListener('pointercancel', endScale)
+  window.addEventListener('blur', endScale)
+  window.addEventListener('resize', () => {
+    state.bubble?.setScale(bubbleScale())
+    state.bubble?.reposition()
+  })
 }
 
 function bindWindowDrag() {
@@ -1288,6 +1341,8 @@ function applySettings(next) {
   if (!bubbleOn && state.bubble?.visible) state.bubble.hide()
   else if (bubbleOn && !state.bubble?.visible && state.bubble?.text) state.bubble.show()
   state.bubble?.setSide(state.settings.bubbleSide === 'left' ? 'left' : 'right')
+  state.bubble?.setScale(bubbleScale())
+  applyBorder(state.settings.border === true)
 
   applyPassState(!!state.settings.clickThrough)
 }
@@ -1520,6 +1575,11 @@ function installProbes({ motionState } = {}) {
     // 活气层：眨眼计数 / 耳朵 / 风；伪面捕：呼吸值
     life: () => state.life?.state?.() ?? null,
     capture: () => state.capture?.state?.() ?? null,
+    // 清掉所有表情来源 + 收回姿势（QA 用，避免上一轮试的参数残留）
+    exprClear() {
+      for (const s of ['bus', 'agent', 'idle-exp', 'probe', 'lean']) state.layers?.removeSource(s)
+      state.poses?.release(0)
+    },
     captureSet: (patch) => state.capture?.set(patch) ?? null,
     blink: () => state.life?.blinkNow?.() ?? null,
     lifeSet: (patch) => state.life?.set?.(patch) ?? null,

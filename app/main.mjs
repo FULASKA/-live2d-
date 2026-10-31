@@ -32,6 +32,7 @@ const DEFAULTS = {
   clickThrough: false,
   bubble: true,          // 气泡总开关
   bubbleSide: 'right',   // 气泡挂在头的哪一侧：right / left
+  border: false,         // 显示窗口边框（拖边框缩放；关掉后回到纯角色）
   model: process.env.STAGE_MODEL || DEFAULT_MODEL,
 }
 
@@ -163,6 +164,57 @@ function startAgentStatusFeed(target) {
 // 窗口尺寸跟随角色：尺寸由渲染层按「模型画布 × 角色大小」算好，这里只负责
 // **保持中心不变**地改大小（角色在窗口里是居中 contain，所以改完依然居中）；
 // 贴近屏幕边缘时按工作区夹一下，不会把窗口推出屏幕。
+// ---------- 拖边框缩放 ----------
+// 渲染层只报告「按下了哪条边」，真正的尺寸跟全局光标走（窗口在被移动时，
+// 窗口内坐标会漂，只有屏幕坐标是稳的）。比例由起始窗口锁定，拖角/拖边都等比。
+let borderDrag = null
+
+function stopBorderDrag(save = true) {
+  if (!borderDrag) return
+  clearInterval(borderDrag.timer)
+  clearTimeout(borderDrag.guard)
+  borderDrag = null
+  if (save && win && !win.isDestroyed()) {
+    const [w, h] = win.getSize()
+    settings.width = w
+    settings.height = h
+    saveSettings()
+  }
+}
+
+function wireBorderDrag() {
+  ipcMain.on('win:scale-begin', (_e, edge = 'se') => {
+    if (!win || win.isDestroyed()) return
+    stopBorderDrag(false)
+    const start = win.getBounds()
+    const ratio = start.width / start.height
+    const tick = () => {
+      if (!win || win.isDestroyed() || !borderDrag) return
+      const p = screen.getCursorScreenPoint()
+      const e = borderDrag.edge
+      let w
+      if (/[ew]/.test(e)) w = /e/.test(e) ? p.x - start.x : start.x + start.width - p.x
+      else {
+        const hh = /s/.test(e) ? p.y - start.y : start.y + start.height - p.y
+        w = hh * ratio
+      }
+      w = Math.round(Math.max(240, Math.min(1600, w)))
+      const h = Math.round(w / ratio)
+      const x = /w/.test(e) ? start.x + start.width - w : /e/.test(e) ? start.x : Math.round(start.x + (start.width - w) / 2)
+      const y = /n/.test(e) ? start.y + start.height - h : /s/.test(e) ? start.y : Math.round(start.y + (start.height - h) / 2)
+      win.setBounds({ x, y, width: w, height: h })
+    }
+    borderDrag = {
+      edge: String(edge),
+      timer: setInterval(tick, 16),
+      // 兜底：pointerup 丢了也不能让窗口一直跟着鼠标缩
+      guard: setTimeout(() => stopBorderDrag(true), 30000),
+    }
+    tick()
+  })
+  ipcMain.on('win:scale-end', () => stopBorderDrag(true))
+}
+
 function wireFit() {
   ipcMain.on('win:fit', (_e, size = {}) => {
     if (!win || win.isDestroyed()) return
@@ -367,6 +419,7 @@ app.whenReady().then(async () => {
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)
   wireIpc()
   wireFit()
+  wireBorderDrag()
   wireWindowDrag()
   startCursorFeed()
   await createWindow()

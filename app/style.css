@@ -51,14 +51,17 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 /* ===== 对话气泡（漫画式短句）=====
    外形参考：粗描边 + 米白底 + 两个「思考点」当尾巴；尺寸由 bubble.js 给。 */
 #bubble {
+  /* --bs：随窗口缩放的统一比例（bubble.js setScale 写入），内边距/描边/尾巴都跟它走 */
+  --bs: 1;
   position: fixed; z-index: 40; display: block;
-  min-width: 64px; max-width: 268px;
-  padding: 9px 16px; border-radius: 22px;
+  min-width: calc(64px * var(--bs)); max-width: 268px;
+  padding: calc(9px * var(--bs)) calc(16px * var(--bs));
+  border-radius: calc(22px * var(--bs));
   background: #fdfaf3;
   color: #23283a;
   /* 描边取角色本身的天蓝（裙子亮片/尾鳍那一档），跟形象统一 */
-  border: 3px solid #5cc3ef;
-  box-shadow: 0 8px 20px rgba(10, 18, 38, 0.3), 0 0 0 1px rgba(92, 195, 239, 0.25);
+  border: calc(3px * var(--bs)) solid #5cc3ef;
+  box-shadow: 0 calc(8px * var(--bs)) calc(20px * var(--bs)) rgba(10, 18, 38, 0.3), 0 0 0 1px rgba(92, 195, 239, 0.25);
   line-height: 1.34; font-weight: 700; letter-spacing: 0.02em;
   text-align: center;
   white-space: pre-wrap; word-break: break-word;
@@ -77,26 +80,26 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 /* 尾巴：两个由大到小的「思考点」，斜着指向角色 */
 #bubble::before, #bubble::after {
   content: ""; position: absolute; border-radius: 50%;
-  background: #fdfaf3; border: 3px solid #5cc3ef;
+  background: #fdfaf3; border: calc(3px * var(--bs)) solid #5cc3ef;
   box-sizing: border-box;
 }
-#bubble::before { width: 12px; height: 12px; }
-#bubble::after { width: 7px; height: 7px; border-width: 2px; }
-#bubble[data-anchor="right"][data-side="above"]::before { left: 18px; bottom: -18px; }
-#bubble[data-anchor="right"][data-side="above"]::after { left: 9px; bottom: -32px; }
+#bubble::before { width: calc(12px * var(--bs)); height: calc(12px * var(--bs)); }
+#bubble::after { width: calc(7px * var(--bs)); height: calc(7px * var(--bs)); border-width: calc(2px * var(--bs)); }
+#bubble[data-anchor="right"][data-side="above"]::before { left: calc(18px * var(--bs)); bottom: calc(-18px * var(--bs)); }
+#bubble[data-anchor="right"][data-side="above"]::after { left: calc(9px * var(--bs)); bottom: calc(-32px * var(--bs)); }
 /* 居中锚点（贴角/居中挂在头顶）：点点放在正下方、落在「框与头之间」的缝里 */
-#bubble[data-anchor="center"][data-side="above"]::before { left: 50%; margin-left: -6px; bottom: -16px; }
-#bubble[data-anchor="center"][data-side="above"]::after { left: 50%; margin-left: -3.5px; bottom: -28px; }
-#bubble[data-anchor="center"][data-side="below"]::before { left: 50%; margin-left: -6px; top: -16px; }
-#bubble[data-anchor="center"][data-side="below"]::after { left: 50%; margin-left: -3.5px; top: -28px; }
-#bubble[data-anchor="left"][data-side="above"]::before { right: 18px; bottom: -18px; }
-#bubble[data-anchor="left"][data-side="above"]::after { right: 9px; bottom: -32px; }
-#bubble[data-side="below"]::before { top: -18px; }
-#bubble[data-side="below"]::after { top: -32px; }
-#bubble[data-anchor="right"][data-side="below"]::before { left: 18px; }
-#bubble[data-anchor="right"][data-side="below"]::after { left: 9px; }
-#bubble[data-anchor="left"][data-side="below"]::before { right: 18px; }
-#bubble[data-anchor="left"][data-side="below"]::after { right: 9px; }
+#bubble[data-anchor="center"][data-side="above"]::before { left: 50%; margin-left: calc(-6px * var(--bs)); bottom: calc(-16px * var(--bs)); }
+#bubble[data-anchor="center"][data-side="above"]::after { left: 50%; margin-left: calc(-3.5px * var(--bs)); bottom: calc(-28px * var(--bs)); }
+#bubble[data-anchor="center"][data-side="below"]::before { left: 50%; margin-left: calc(-6px * var(--bs)); top: calc(-16px * var(--bs)); }
+#bubble[data-anchor="center"][data-side="below"]::after { left: 50%; margin-left: calc(-3.5px * var(--bs)); top: calc(-28px * var(--bs)); }
+#bubble[data-anchor="left"][data-side="above"]::before { right: calc(18px * var(--bs)); bottom: calc(-18px * var(--bs)); }
+#bubble[data-anchor="left"][data-side="above"]::after { right: calc(9px * var(--bs)); bottom: calc(-32px * var(--bs)); }
+#bubble[data-side="below"]::before { top: calc(-18px * var(--bs)); }
+#bubble[data-side="below"]::after { top: calc(-32px * var(--bs)); }
+#bubble[data-anchor="right"][data-side="below"]::before { left: calc(18px * var(--bs)); }
+#bubble[data-anchor="right"][data-side="below"]::after { left: calc(9px * var(--bs)); }
+#bubble[data-anchor="left"][data-side="below"]::before { right: calc(18px * var(--bs)); }
+#bubble[data-anchor="left"][data-side="below"]::after { right: calc(9px * var(--bs)); }
 
 /* 状态色：只改底色氛围，描边保持角色天蓝（不改边色） */
 #bubble[data-state="thinking"] { background: #f4f8fd; }
@@ -104,3 +107,31 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 #bubble[data-state="waiting"] { background: #fff9ee; }
 #bubble[data-state="success"] { background: #f2fbf4; }
 #bubble[data-state="error"] { background: #fdf3f3; }
+
+/* ---------- 窗口边框（设置里打开；拖边/拖角等比缩放） ---------- */
+#frame {
+  position: fixed; inset: 0; z-index: 70; pointer-events: none;
+  border: 2px solid rgba(112, 186, 255, 0.92);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), inset 0 0 18px rgba(96, 170, 255, 0.22);
+}
+#frame.hidden { display: none; }
+#frame .fh { position: absolute; pointer-events: auto; }
+#frame .fh.n, #frame .fh.s { left: 16px; right: 16px; height: 12px; cursor: ns-resize; }
+#frame .fh.n { top: 0; }
+#frame .fh.s { bottom: 0; }
+#frame .fh.e, #frame .fh.w { top: 16px; bottom: 16px; width: 12px; cursor: ew-resize; }
+#frame .fh.e { right: 0; }
+#frame .fh.w { left: 0; }
+#frame .fh.nw, #frame .fh.ne, #frame .fh.sw, #frame .fh.se {
+  width: 20px; height: 20px;
+}
+#frame .fh.nw { left: 0; top: 0; cursor: nwse-resize; }
+#frame .fh.ne { right: 0; top: 0; cursor: nesw-resize; }
+#frame .fh.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+#frame .fh.se { right: 0; bottom: 0; cursor: nwse-resize; }
+/* 角上补一个亮块，透明背景下也能看出抓手 */
+#frame .fh.nw::after, #frame .fh.ne::after, #frame .fh.sw::after, #frame .fh.se::after {
+  content: ""; position: absolute; inset: 5px; border-radius: 3px;
+  background: rgba(112, 186, 255, 0.55);
+}

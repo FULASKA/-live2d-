@@ -12,13 +12,14 @@
   <section>
     <h3>角色大小（窗口等比例跟随）</h3>
     <div class="row"><input type="range" id="zoom" min="0.3" max="3" step="0.05"><span id="zoom-readout" class="readout"></span></div>
-    <div class="hint">窗口尺寸 = 角色大小 × 模型画布，角色永远居中；把鼠标放到<b>角色身上按 Ctrl + 滚轮</b>也能缩</div>
+    <div class="hint">角色、窗口、气泡按同一比例联动；也可以打开「窗口边框」直接拖边/角缩放</div>
   </section>
 
   <section>
     <h3>窗口</h3>
-    <div class="row"><span id="size-readout" class="readout">— × —</span><button id="win-center">居中</button></div>
-    <div class="hint">窗口大小由角色大小推导（不再拖边框改）；<b>左键或中键拖角色</b>搬窗口</div>
+    <div class="row"><label><input type="checkbox" id="border"> 显示窗口边框（拖边/角缩放）</label></div>
+    <div class="row"><button id="win-center">居中</button></div>
+    <div class="hint">打开后显示淡蓝边框与把手，拖四边或四角等比缩放；<b>左键或中键拖角色</b>搬窗口</div>
   </section>
 
   <section>
@@ -47,18 +48,6 @@
   </section>
 
   <section>
-    <h3>分区反应（点击 / 滑动）</h3>
-    <div class="row">
-      <select id="rx-region"></select>
-      <select id="rx-kind"><option value="tap">点击</option><option value="pet">滑动</option></select>
-      <select id="rx-mode"><option value="expr">临时</option><option value="toggle">切换</option></select>
-    </div>
-    <div class="row chips" id="rx-exprs"></div>
-    <div class="row"><button id="rx-reset">恢复默认</button></div>
-    <div class="hint">勾上的表情 = 这一组反应。「临时」几秒后自己退场；「切换」是点一次开、再点关（换装/穿脱这类长期状态）</div>
-  </section>
-
-  <section>
     <h3>动作与发布</h3>
     <div class="row"><button id="open-editor" class="wide">打开动作编辑器</button></div>
     <div class="row"><button id="patch-export" class="wide">导出改动补丁</button></div>
@@ -77,7 +66,7 @@
     <button id="quit">退出</button>
   </section>
 
-  <div class="hint">拖覆盖层边缘改大小 · 拖角色移动窗口 · 覆盖层空白处右键唤出工具条</div>
+  <div class="hint">设置里打开「窗口边框」后可拖边/角缩放 · 拖角色移动窗口 · 空白处右键唤出工具条</div>
   <div id="status" class="status"></div>
 </main>
 <script src="./settings.js" type="module"></script>

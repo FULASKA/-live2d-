@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('shell', {
   moveBy: (dx, dy) => ipcRenderer.send('win:move', { dx, dy }),
   // 窗口尺寸跟随角色：渲染层算尺寸，主进程保持中心不变地改
   fit: (w, h) => ipcRenderer.send('win:fit', { w, h }),
+  // 拖边框缩放：报告按下的边，主进程按全局光标改 bounds（比例锁定）
+  scaleBegin: (edge) => ipcRenderer.send('win:scale-begin', edge),
+  scaleEnd: () => ipcRenderer.send('win:scale-end'),
   center: () => ipcRenderer.send('win:center'),
   setPassThrough: (v) => ipcRenderer.send('win:pass-through', v),
   onClickThrough: (fn) => ipcRenderer.on('shell:click-through', (_e, v) => fn(v)),

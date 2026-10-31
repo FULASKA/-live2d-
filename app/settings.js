@@ -17,7 +17,6 @@ const shell = window.shell || {
 }
 
 let settings = {}
-let meta = null
 
 function status(text, warn = false) {
   const el = $('#status')
@@ -47,10 +46,6 @@ const pushSettings = (patch) => shell.set(patch)
 const pushSettingsSoon = debounce((patch) => shell.set(patch))
 
 function paint() {
-  const w = Math.round(Number(settings.width) || 0)
-  const h = Math.round(Number(settings.height) || 0)
-  $('#size-readout').textContent = w && h ? `${w} × ${h}` : '— × —'
-
   const zoom = Number(settings.zoom) || 1
   setRange('#zoom', zoom)
   $('#zoom-readout').textContent = `${Math.round(zoom * 100)}%`
@@ -65,6 +60,7 @@ function paint() {
   setCheck('#gaze', settings.gaze !== false)
   setCheck('#idle', settings.idle !== false)
   setCheck('#bubble-on', settings.bubble !== false)
+  setCheck('#border', !!settings.border)
   setCheck('#top', !!settings.alwaysOnTop)
   setCheck('#click-through', !!settings.clickThrough)
   if (document.activeElement !== $('#bubble-side')) {
@@ -91,63 +87,6 @@ function setCheck(sel, on) {
   if (el) el.checked = !!on
 }
 
-// ---------- 分区反应 ----------
-function rxCurrent() {
-  const region = meta?.reactions?.[$('#rx-region').value]
-  const rx = region?.[$('#rx-kind').value]
-  return {
-    mode: rx?.toggle ? 'toggle' : 'expr',
-    picked: new Set(rx?.toggle ? [rx.toggle] : (rx?.expr || [])),
-  }
-}
-
-function renderReactions() {
-  const box = $('#rx-exprs')
-  const cur = rxCurrent()
-  $('#rx-mode').value = cur.mode
-  const exprs = meta?.exprs || []
-  box.innerHTML = exprs.map((n) => (
-    `<label><input type="checkbox" value="${n}"${cur.picked.has(n) ? ' checked' : ''}>${n}</label>`
-  )).join('') || '<span class="hint">舞台还没报表情清单</span>'
-  box.querySelectorAll('input').forEach((inp) => {
-    inp.onchange = () => {
-      let picked = [...box.querySelectorAll('input:checked')].map((i) => i.value)
-      // 切换型只能用一个表情：后勾的顶替前面的
-      if ($('#rx-mode').value === 'toggle' && picked.length > 1) {
-        picked = [picked[picked.length - 1]]
-        box.querySelectorAll('input').forEach((i) => { i.checked = i.value === picked[0] })
-      }
-      void sendReaction(picked)
-    }
-  })
-}
-
-async function sendReaction(exprs) {
-  const mode = $('#rx-mode').value
-  const picked = exprs || [...$('#rx-exprs').querySelectorAll('input:checked')].map((i) => i.value)
-  const v = await rpc('reaction', {
-    region: $('#rx-region').value,
-    kind: $('#rx-kind').value,
-    exprs: mode === 'toggle' ? picked.slice(0, 1) : picked,
-    mode,
-  })
-  if (v?.reactions) {
-    meta.reactions = v.reactions
-    renderReactions()
-  }
-}
-
-async function loadMeta() {
-  meta = await rpc('meta')
-  const sel = $('#rx-region')
-  if (meta?.regions?.length) {
-    const keep = sel.value
-    sel.innerHTML = meta.regions.map((n) => `<option>${n}</option>`).join('')
-    if (meta.regions.includes(keep)) sel.value = keep
-    renderReactions()
-  }
-}
-
 // ---------- 事件 ----------
 function wire() {
   $('#zoom').oninput = (e) => {
@@ -171,18 +110,9 @@ function wire() {
   }
   $('#bubble-on').onchange = (e) => pushSettings({ bubble: !!e.target.checked })
   $('#bubble-side').onchange = (e) => pushSettings({ bubbleSide: e.target.value === 'left' ? 'left' : 'right' })
+  $('#border').onchange = (e) => pushSettings({ border: !!e.target.checked })
   $('#top').onchange = (e) => pushSettings({ alwaysOnTop: !!e.target.checked })
   $('#click-through').onchange = (e) => pushSettings({ clickThrough: !!e.target.checked })
-
-  $('#rx-region').onchange = () => renderReactions()
-  $('#rx-kind').onchange = () => renderReactions()
-  $('#rx-mode').onchange = () => void sendReaction()
-  $('#rx-reset').onclick = async () => {
-    const region = $('#rx-region').value
-    const v = await rpc('reactionReset', { region })
-    if (v?.reactions) { meta.reactions = v.reactions; renderReactions() }
-    status(`${region} 反应已恢复默认`)
-  }
 
   $('#open-editor').onclick = () => shell.openEditor?.()
   $('#patch-export').onclick = async () => {
@@ -201,7 +131,6 @@ async function boot() {
   paint()
   shell.onSettings?.((next) => { settings = next || settings; paint() })
   wire()
-  await loadMeta()
 }
 
 void boot()
