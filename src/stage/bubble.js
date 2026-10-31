@@ -19,7 +19,7 @@ const FONT_STEPS = [
   [Infinity, 14],
 ]
 
-export function createBubble({ el, anchor, side = 'right', corner = false }) {
+export function createBubble({ el, anchor, side = 'right', corner = false, onSpeak = null }) {
   if (!el) throw new Error('bubble: 缺少容器')
   el.classList.add('bubble')
   let visible = false
@@ -137,11 +137,16 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
     show(text, opts = {}) {
       // 被锁住时：只有锁的主人能改字（防止待机台词 / 互动台词把 agent 的进度顶掉）
       if (lockOwner && opts.owner !== lockOwner) return
+      const changed = text != null && String(text) !== lastText
       if (text != null) this.set(text, opts)
       visible = true
       el.classList.add('on')
       layout(lastText)
       place()
+      // 冒泡时让她动嘴：按字数估一个时长（含标点停顿），看起来像在念这句话
+      if (changed && lastText) {
+        try { onSpeak?.(lastText) } catch {}
+      }
       // 量完再定一次位（首帧字号还没生效时高度会差一点）
       requestAnimationFrame(() => { if (visible) place() })
     },

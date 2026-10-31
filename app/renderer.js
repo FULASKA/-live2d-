@@ -253,6 +253,12 @@ async function main() {
       el: $('#bubble'),
       side: 'right', // 位置固定贴右上角（自定义左右已移除）
       corner: true,
+      // 冒泡时动嘴：按字数估时长（约 145ms/字 + 起止），念完自动收
+      onSpeak: (text) => {
+        const n = Array.from(String(text)).length
+        const ms = Math.max(600, Math.min(4200, 160 + n * 145))
+        state.mouth?.talk?.(ms)
+      },
     })
     setInterval(() => { if (state.bubble?.visible) state.bubble.reposition() }, 200)
     // DSH 联动：状态 → 气泡台词 / 表情 / 小动作（状态文件由主进程轮询后推过来）
@@ -648,6 +654,11 @@ function applyMode(name) {
   const next = MODE_LIST.includes(name) ? name : '常态'
   modeName = next
   if (!state.layers) return next
+  // 三态互斥：爱心眼 / 眼镜不管来自哪一层（额头循环、点头部的 switch 层、手动按钮）都先清掉，
+  // 否则爱心眼会一直挂在脸上，切回常态也消不掉
+  for (const n of ['爱心眼', '黑框眼镜']) {
+    try { state.layers.removeExpression(n) } catch {}
+  }
   try { state.layers.removeSource('mode') } catch {}
   if (next !== '常态') {
     const def = (state.caps?.expressions || []).find((e) => e.name === next)
@@ -1419,7 +1430,35 @@ async function stageRpc(op, payload) {
       exprs: (state.caps?.expressions || []).map((e) => e.name),
       reactions: reactionsSnapshot(),
       poses: Object.keys(POSES),
+      active: {
+        exprs: (state.layers?.inspect?.()?.layers || []).map((l) => l.name),
+        pose: state.poses?.state?.()?.active ?? null,
+      },
     }
+  }
+  if (op === 'expr') {
+    const name = String(payload?.name || '')
+    const def = (state.caps?.expressions || []).find((e) => e.name === name)
+    if (!def) return { error: `没有这个表情：${name}` }
+    if (state.layers?.hasExpression?.(name)) state.layers.removeExpression(name)
+    else state.layers?.addExpression(name, def.params, { source: 'manual', fade: 0.25 })
+    return {
+      active: {
+        exprs: (state.layers?.inspect?.()?.layers || []).map((l) => l.name),
+        pose: state.poses?.state?.()?.active ?? null,
+      },
+    }
+  }
+  if (op === 'pose') {
+    const name = String(payload?.name || '')
+    if (!POSES[name]) return { error: `没有这个姿势：${name}` }
+    state.poses?.set(name, 320)
+    return { active: { exprs: (state.layers?.inspect?.()?.layers || []).map((l) => l.name), pose: state.poses?.state?.()?.active ?? null } }
+  }
+  if (op === 'exprClear') {
+    for (const s of ['manual', 'mode', 'bus', 'agent', 'idle-exp', 'pinch', 'crotch-face']) state.layers?.removeSource(s)
+    state.poses?.release(360)
+    return { active: { exprs: [], pose: '默认手' } }
   }
   if (op === 'reaction') {
     const { region, kind = 'tap', exprs = [], mode = 'expr' } = payload || {}

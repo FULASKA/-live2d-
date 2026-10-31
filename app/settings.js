@@ -109,11 +109,13 @@ function wire() {
     pushSettingsSoon({ idleSpeed: s })
   }
   $('#bubble-on').onchange = (e) => pushSettings({ bubble: !!e.target.checked })
-  // 模型三态：走舞台的 stageRpc（表情层在舞台里，不在设置窗口）
-  const setMode = (name) => rpc('mode', { name }).then((v) => { if (v) status('表情：' + (v.mode || name)) })
-  $('#mode-normal').onclick = () => setMode('常态')
-  $('#mode-heart').onclick = () => setMode('爱心眼')
-  $('#mode-glasses').onclick = () => setMode('黑框眼镜')
+  // 模型表情 / 预设动作：列表从舞台的 meta 来（原包全部表情 + 姿势）
+  $('#mode-normal').onclick = async () => {
+    await rpc('exprClear')
+    status('已回到常态')
+    await loadModelLists()
+  }
+  loadModelLists()
   $('#border').onchange = (e) => pushSettings({ border: !!e.target.checked })
   $('#pad-y').oninput = (e) => {
     const v = Number(e.target.value)
@@ -133,6 +135,62 @@ function wire() {
   $('#win-center').onclick = () => { shell.center?.(); status('覆盖层已居中') }
   $('#open-harness').onclick = () => shell.openHarness?.()
   $('#quit').onclick = () => shell.quit?.()
+}
+
+// ---------- 模型表情 / 预设动作 ----------
+// 列表来自舞台窗口的 meta（caps.expressions 全量 + POSES），点一下应用/取消，按钮高亮当前生效项。
+let activeExprs = []
+let activePose = '默认手'
+
+function paintChips() {
+  for (const btn of document.querySelectorAll('#expr-list .chip')) {
+    btn.classList.toggle('on', activeExprs.includes(btn.dataset.expr))
+  }
+  for (const btn of document.querySelectorAll('#pose-list .chip')) {
+    btn.classList.toggle('on', activePose === btn.dataset.pose)
+  }
+}
+
+async function loadModelLists() {
+  const meta = await rpc('meta')
+  if (!meta) return
+  activeExprs = meta.active?.exprs || []
+  activePose = meta.active?.pose || '默认手'
+  const exprBox = $('#expr-list')
+  if (exprBox && !exprBox.dataset.built) {
+    exprBox.dataset.built = '1'
+    for (const name of meta.exprs || []) {
+      const btn = document.createElement('button')
+      btn.className = 'chip'
+      btn.textContent = name
+      btn.dataset.expr = name
+      btn.onclick = async () => {
+        const r = await rpc('expr', { name })
+        if (!r) return
+        activeExprs = r.active?.exprs || []
+        paintChips()
+      }
+      exprBox.append(btn)
+    }
+  }
+  const poseBox = $('#pose-list')
+  if (poseBox && !poseBox.dataset.built) {
+    poseBox.dataset.built = '1'
+    for (const name of meta.poses || []) {
+      const btn = document.createElement('button')
+      btn.className = 'chip'
+      btn.textContent = name
+      btn.dataset.pose = name
+      btn.onclick = async () => {
+        const r = await rpc('pose', { name })
+        if (!r) return
+        activePose = r.active?.pose || name
+        paintChips()
+      }
+      poseBox.append(btn)
+    }
+  }
+  paintChips()
 }
 
 async function boot() {

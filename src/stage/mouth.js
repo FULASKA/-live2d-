@@ -74,10 +74,25 @@ export function createMouth({ param, options = {} } = {}) {
   function speak(v) { levelTarget = clamp(Number(v) || 0, 0, 1) }
   function stop() { levelTarget = 0 }
 
+  // 「假装说话」：气泡出现时自己编一段能量包络（有音节、有停顿），不用外部喂音频
+  let talkUntil = 0
+  function talk(ms = 1200) {
+    talkUntil = Math.max(talkUntil, performance.now() + Math.max(200, Number(ms) || 0))
+  }
+
   function apply(dtMs = 1000 / 60) {
     const dt = clamp(dtMs / 1000, 0.001, 0.12)
     t += dt
     phase += dt * Math.PI * 2 * cfg.breathHz
+
+    // 气泡说话：用两段不同周期拼出「音节 + 换气停顿」，比匀速开合自然
+    if (performance.now() < talkUntil) {
+      const syllable = Math.abs(Math.sin(t * 11.5)) * 0.55 + Math.abs(Math.sin(t * 23.1)) * 0.25
+      const pause = Math.sin(t * 2.3) > 0.86            // 偶尔咽口气
+      levelTarget = pause ? 0.04 : clamp(0.35 + syllable, 0, 1)
+    } else if (levelTarget > 0.03 && !performance.now() < talkUntil) {
+      levelTarget = 0
+    }
 
     // 音量跟随：起音快、收音慢，像真人在说
     const k = 1 - Math.exp(-(levelTarget > level ? cfg.attack : cfg.release) * dt)
@@ -130,7 +145,7 @@ export function createMouth({ param, options = {} } = {}) {
   }
 
   return {
-    apply, speak, stop, setMood, clearMood,
+    apply, speak, stop, talk, setMood, clearMood,
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
     state: () => ({ level: Math.round(level * 100) / 100, open: Math.round(open * 1000) / 1000, syl: Math.round(syl * 100) / 100, talking, mood: !!mood }),

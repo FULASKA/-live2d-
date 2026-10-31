@@ -41,7 +41,14 @@ body.settings {
 #panel .hint { color: #7d8fa8; font-size: 11px; margin-top: 6px; }
 #panel .hint b { color: #a9c2e4; font-weight: 600; }
 
-#panel .chips { flex-wrap: wrap; gap: 4px 6px; max-height: 148px; overflow: auto; }
+#panel .chips { display: flex; flex-wrap: wrap; gap: 4px 6px; max-height: 148px; overflow: auto; }
+/* 表情 / 预设动作按钮：点一下应用、再点取消，生效项高亮 */
+#panel .chips .chip {
+  padding: 3px 9px; border-radius: 999px; font-size: 11px; line-height: 1.5;
+  background: #12161f; border: 1px solid rgba(255, 255, 255, 0.1); color: #c9dcf5; cursor: pointer;
+}
+#panel .chips .chip:hover { border-color: rgba(120, 180, 255, 0.6); }
+#panel .chips .chip.on { border-color: rgba(120, 180, 255, 0.85); background: rgba(91, 157, 255, 0.2); color: #eaf3ff; }
 #panel .chips label {
   display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1); font-size: 11px; cursor: pointer; opacity: 0.85;
