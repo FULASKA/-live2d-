@@ -114,14 +114,13 @@ async function main() {
     bootRegions()
     // 窗口尺寸跟角色绑定：模型尺寸拿到了，立刻把窗口收成刚好包住角色的样子
     applyFit(true)
-    // 对话气泡：漫画式挂在头顶右侧（设置里可切左侧），锚点跟左右脸热区走，头部一动就跟着
+    // 对话气泡：贴窗口右上角（选左侧就贴左上角），窗口本身刚好包住角色，所以等于贴在头斜上方
     state.bubble = createBubble({
       el: $('#bubble'),
-      anchor: bubbleAnchor,
       side: state.settings.bubbleSide === 'left' ? 'left' : 'right',
+      corner: true,
     })
-    // 80ms 跟一次（脸部热区就是 80ms 重算的），头转/低头时气泡跟着挪，不会钉在原位
-    setInterval(() => { if (state.bubble?.visible) state.bubble.reposition() }, 80)
+    setInterval(() => { if (state.bubble?.visible) state.bubble.reposition() }, 200)
     // DSH 联动：状态 → 气泡台词 / 表情 / 小动作（状态文件由主进程轮询后推过来）
     state.agentLink = createAgentLink({
       bubble: state.bubble,
@@ -384,7 +383,10 @@ async function bootStage() {
     }
   })
   // 桌面级跟随：主进程持续读全局光标位置，窗口外也能看过去
-  shell.onCursor?.((p) => { if (!window.__noDesktopGaze) lookFromClient(p.x, p.y) })
+  shell.onCursor?.((p) => {
+    window.__cursorLast = p // 诊断用：看主进程推来的到底是什么坐标
+    if (!window.__noDesktopGaze) lookFromClient(p.x, p.y)
+  })
 }
 
 /** 捏脸时的表情反馈：＞＜ + 脸红（独立 source，松手整组撤掉，不干扰分区反应） */const PINCH_EXPRS = ['＞＜', '脸红']
@@ -826,36 +828,6 @@ function fitSize() {
 
 let fitTimer = 0
 const BODY_BANDS = ['头', '胸', '腰', '裙摆', '腿', '脚']
-
-/**
- * 气泡锚点 = 左右脸热区的实时包围盒，再往上让出头发的高度。
- *
- * 不能用「头」那条静态热区：它是按部件 y 段播下去的固定多边形，头一转、一低头、
- * 身体一摆，屏幕上头的位置变了而多边形不动，气泡就钉在原地看着很怪。
- * 左右脸热区每 80ms 由网格顶点重算（regions.js 的 createFaceZoneReader），天然跟手。
- */
-function bubbleAnchor() {
-  const L = regionScreenBox('左脸')
-  const R = regionScreenBox('右脸')
-  const a = L || R
-  if (!a) return regionScreenBox('头')
-  const b = R || L
-  const left = Math.min(a.left, b.left)
-  const right = Math.max(a.right, b.right)
-  const top = Math.min(a.top, b.top)
-  const bottom = Math.max(a.bottom, b.bottom)
-  const w = Math.max(1, right - left)
-  const h = Math.max(1, bottom - top)
-  // 左右各放宽 0.34w、上方抬高 1.25h：把头发/耳朵的轮廓也算进去，泡泡不压脸
-  return {
-    left: left - w * 0.34,
-    right: right + w * 0.34,
-    top: top - h * 1.25,
-    bottom,
-    width: w * 1.68,
-    height: h * 2.25,
-  }
-}
 
 /**
  * 身体中心（模型坐标）：只取静态的躯干/四肢热区包围盒，**不含尾巴和手**——
@@ -1445,6 +1417,8 @@ function installProbes({ motionState } = {}) {
     mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
     /** 视口状态（缩放/偏移/实际像素缩放）—— 排查「窗口跟着角色」时的落点 */
     view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
+    /** 跟随层的内部状态（平滑后的眼/头/身），排查「头不转」时看它到底是没算还是有被覆盖 */
+    gazeState: () => state.gaze?.state?.() ?? null,
     /** 真实轮廓在窗口里的包围盒（客户端像素）+ 相对窗口中心的偏移 dx/dy */
     maskBox: () => {
       const m = state.mask || refreshMask(true)

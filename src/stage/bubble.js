@@ -19,7 +19,7 @@ const FONT_STEPS = [
   [Infinity, 14],
 ]
 
-export function createBubble({ el, anchor, side = 'right' }) {
+export function createBubble({ el, anchor, side = 'right', corner = false }) {
   if (!el) throw new Error('bubble: 缺少容器')
   el.classList.add('bubble')
   let visible = false
@@ -77,7 +77,13 @@ export function createBubble({ el, anchor, side = 'right' }) {
     const h = el.offsetHeight || 60
     let side = anchorSide
     let x, y
-    if (a) {
+    if (corner) {
+      // 默认形态：贴窗口右上角（选左侧就贴左上角），离窗口边缘留 10px。
+      // 窗口本身是「刚好包住角色」的，所以贴角即贴在头的斜上方，位置可预期、不抖。
+      const PAD = 10
+      x = side === 'right' ? vp.w - w - PAD : PAD
+      y = PAD
+    } else if (a) {
       const offset = Math.max(4, Math.round(w * 0.06))
       const gap = 6
       const fitsRight = a.right + offset + w <= vp.w - gap
@@ -104,9 +110,9 @@ export function createBubble({ el, anchor, side = 'right' }) {
     y = Math.max(6, Math.min(vp.h - h - 6, y))
     el.style.left = `${Math.round(x)}px`
     el.style.top = `${Math.round(y)}px`
-    el.dataset.anchor = side
+    el.dataset.anchor = corner ? 'center' : side
     // 尾巴点点的方向：泡泡在头顶上方 → 点点朝下；挂在头侧 → 也朝下（都是低点更高）
-    el.dataset.side = a && y + h + 2 <= a.top ? 'above' : 'below'
+    el.dataset.side = a && !corner && y + h + 2 <= a.top ? 'above' : 'below'
   }
 
   return {
