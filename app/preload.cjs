@@ -19,4 +19,6 @@ contextBridge.exposeInMainWorld('shell', {
   onClickThrough: (fn) => ipcRenderer.on('shell:click-through', (_e, v) => fn(v)),
   // 全局光标位置（窗口外也有），跟随要覆盖整个桌面
   onCursor: (fn) => ipcRenderer.on('cursor:pos', (_e, p) => fn(p)),
+  // DSH 工作状态（主进程轮询状态文件后推过来）：{ state, task, tool, at }
+  onAgentStatus: (fn) => ipcRenderer.on('agent:status', (_e, s) => fn(s)),
 })

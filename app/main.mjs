@@ -8,7 +8,7 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -98,6 +98,41 @@ async function createWindow() {
   await win.loadURL(`${srv.url}/app/`)
   applyWindowSettings()
   win.on('closed', () => { win = null })
+  startAgentStatusFeed(win)
+}
+
+// ---------- DSH 工作状态：读桥接插件写的状态文件，推给渲染层 ----------
+// 插件（dsh-live2d-bridge）在 DSH 侧监听 session/event，原子写 ~/.dsh/live2d/status.json；
+// 这里只做「文件变了就转发」，不解析业务、不阻塞界面。文件不在 = DSH 侧没装插件，舞台按空闲处理。
+const AGENT_STATUS_FILE = path.join(app.getPath('home'), '.dsh', 'live2d', 'status.json')
+function startAgentStatusFeed(target) {
+  let lastSig = ''
+  let lastAt = 0
+  const tick = async () => {
+    if (!target || target.isDestroyed()) return
+    try {
+      const st = await stat(AGENT_STATUS_FILE).catch(() => null)
+      if (!st) { lastSig = ''; return }
+      const sig = `${st.mtimeMs}:${st.size}`
+      if (sig === lastSig) return
+      lastSig = sig
+      const raw = await readFile(AGENT_STATUS_FILE, 'utf8')
+      let snap = null
+      try { snap = JSON.parse(raw) } catch { return }
+      if (!snap || typeof snap !== 'object') return
+      const at = Number(snap.at || 0)
+      if (at && at === lastAt) return
+      lastAt = at
+      target.webContents.send('agent:status', {
+        state: snap.state ?? null,
+        task: snap.task ?? null,
+        tool: snap.tool ?? null,
+        at: at || Date.now(),
+      })
+    } catch {}
+  }
+  setInterval(tick, 400).unref?.()
+  tick()
 }
 
 // 拖窗口轮廓改大小：无边框窗口没法靠系统边框，渲染层的八个把手发增量，这里按边缘锚点算 bounds

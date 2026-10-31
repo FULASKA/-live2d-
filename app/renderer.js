@@ -15,6 +15,7 @@ import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
 import { createPoses } from '../src/stage/poses.js'
 import { createBubble } from '../src/stage/bubble.js'
+import { createAgentLink } from '../src/stage/agent-link.js'
 import { createProfiler } from '../src/stage/perf.js'
 
 const $ = (s) => document.querySelector(s)
@@ -113,6 +114,15 @@ async function main() {
       side: state.settings.bubbleSide === 'left' ? 'left' : 'right',
     })
     setInterval(() => { if (state.bubble?.visible) state.bubble.reposition() }, 250)
+    // DSH 联动：状态 → 气泡台词 / 表情 / 小动作（状态文件由主进程轮询后推过来）
+    state.agentLink = createAgentLink({
+      bubble: state.bubble,
+      layers: state.layers,
+      expressions: state.caps.expressions || [],
+      poses: state.poses,
+      life: state.life,
+    })
+    shell.onAgentStatus?.((snap) => state.agentLink?.apply(snap))
     bindPanel()
     bindWindowDrag()
     bindToolsDismiss()
@@ -362,6 +372,9 @@ async function bootStage() {
     bubbleSide(side) { state.bubble?.setSide(side) },
     /** 说一句预设台词（thinking / working / waiting / success / error / head / hand …） */
     say(key, ms = 0) { return state.bubble?.say(key, { ms }) ?? null },
+    /** 模拟一条 DSH 状态（不接插件时也能验证联动） */
+    agent(snap) { state.agentLink?.apply(snap) },
+    agentState: () => state.agentLink?.state() ?? null,
     /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
     pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
