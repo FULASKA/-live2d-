@@ -7,7 +7,7 @@ import { createGaze } from '../src/stage/gaze.js'
 import { createPoseBus } from '../src/stage/pose-bus.js'
 import { createIdleMotions } from '../src/stage/idle-motions.js'
 import { createTickle } from '../src/stage/tickle.js'
-import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader, createHandZoneReader } from '../src/stage/regions.js'
+import { createRegionStore, createRegionInput, seedRegions, faceRegions, foreheadRegion, createFaceZoneReader, createHandZoneReader } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
 import { createFacePinch } from '../src/stage/face-pinch.js'
@@ -251,7 +251,7 @@ async function main() {
     // 对话气泡：贴窗口右上角（选左侧就贴左上角），窗口本身刚好包住角色，所以等于贴在头斜上方
     state.bubble = createBubble({
       el: $('#bubble'),
-      side: state.settings.bubbleSide === 'left' ? 'left' : 'right',
+      side: 'right', // 位置固定贴右上角（自定义左右已移除）
       corner: true,
     })
     setInterval(() => { if (state.bubble?.visible) state.bubble.reposition() }, 200)
@@ -639,6 +639,44 @@ function crotchFace(on) {
 }
 
 /**
+ * 模型三态：常态 → 爱心眼 → 黑框眼镜（点额头循环）。
+ * source 独立（'mode'），不和分区反应 / agent 表情互相覆盖。
+ */
+const MODE_LIST = ['常态', '爱心眼', '黑框眼镜']
+let modeName = '常态'
+function applyMode(name) {
+  const next = MODE_LIST.includes(name) ? name : '常态'
+  modeName = next
+  if (!state.layers) return next
+  try { state.layers.removeSource('mode') } catch {}
+  if (next !== '常态') {
+    const def = (state.caps?.expressions || []).find((e) => e.name === next)
+    if (def) {
+      try { state.layers.addExpression(next, def.params, { source: 'mode', fade: 0.22 }) } catch {}
+    }
+  }
+  return next
+}
+function cycleMode() {
+  const i = MODE_LIST.indexOf(modeName)
+  return applyMode(MODE_LIST[(i + 1) % MODE_LIST.length])
+}
+
+/** 触摸动作 → 台词档（tap / pet 分开；脚和腰的 pet 由「痒痒的」统一说话，这里不重复） */
+const TOUCH_PHRASE = {
+  头: { tap: 'head', pet: 'head' },
+  胸: { tap: 'chest', pet: 'chest' },
+  腰: { tap: 'waistTap' },
+  裙摆: { tap: 'skirt', pet: 'skirt' },
+  腿: { tap: 'legs', pet: 'legs' },
+  脚: { tap: 'foot' },
+  左手: { pet: 'handPet' },
+  右手: { pet: 'handPet' },
+  胯: { tap: 'crotchTap' },
+  尾巴: { tap: 'tail', pet: 'tailPet' },
+}
+
+/**
  * 热区迁移表。
  * 每条 = 「这几个热区应该有几块、当前版本号是多少、不够或过旧时怎么重建」。
  * 以前是三个手写的 if 链堆在 bootRegions 里（脸 V3 / 手 V1 / 胯 V1），加一个热区就要
@@ -658,6 +696,14 @@ const ZONE_MIGRATIONS = [
     names: ['左手', '右手'],
     version: 1,
     build: ({ handReader }) => handReader.read().map((r) => ({ ...r, reaction: DEFAULT_REACTIONS[r.name] || {} })),
+  },
+  {
+    // 额头热区：点一下切换 常态 / 爱心眼 / 眼镜（层级压过「头」，才抢得到点击）
+    names: ['额头'],
+    version: 1,
+    build: ({ core, internalModel, displayNames, canvas }) => (
+      foreheadRegion({ core, internalModel, displayNames, canvas }).map((r) => ({ ...r, reaction: {} }))
+    ),
   },
   {
     // 胯部热区：模型自带参数里手臂够不到胯（±1 只能挪 ~400px），所以单独划一块
@@ -761,6 +807,11 @@ function bootRegions() {
           }
         }
       }
+      // 额头跟着脸一起重算（前倾/歪头时整张脸会移动）
+      const fore = state.store.all.find((r) => r.name === '额头')
+      if (fore) {
+        try { const pts = reader.readForehead?.(); if (pts) fore.points = pts } catch {}
+      }
       // 手和脸用同一个心跳：各自缓存索引表，单次都是亚毫秒级
       const hands = state.store.all.filter((r) => r.name === '左手' || r.name === '右手')
       if (hands.length === 2) {
@@ -805,6 +856,11 @@ function bootRegions() {
       // 否则会出现「黑脸 + 打瞌睡半睁眼」这种叠出来的怪状态。
       // 只认真正的接触（按下 / 抚摸 / 拖拽），hover 不算 —— 鼠标停在角色身上不该冻结待机。
       if (ev.type === 'down' || ev.type === 'pet' || ev.type === 'dragStart') state.idle?.reset?.(2600)
+      // 摸到别处就把「摸胯神态」收掉，不然半睁眼会挂到下一个动作上
+      if (name !== '胯' && (ev.type === 'down' || ev.type === 'tap' || (ev.type === 'pet' && ev.step === 1))) {
+        clearTimeout(state.crotchFaceHold)
+        crotchFace(false)
+      }
       // 摸胸：右手盖到胸口（举手姿势），表情走分区反应（屑屑眼）
       if (name === '胸' && ev.type === 'pet' && ev.step === 1) {
         state.poses?.set('举手', 320)
@@ -821,18 +877,29 @@ function bootRegions() {
         clearTimeout(state.crotchHold)
         state.crotchHold = setTimeout(() => { state.poses?.release(420) }, 4200)
       }
+      // 点额头 = 模型三态循环：常态 → 爱心眼 → 黑框眼镜
+      if (ev.type === 'tap' && name === '额头') {
+        const m = cycleMode()
+        toast(`表情：${m}`)
       // 点手 = 竖手指（抬起/放下），不再走表情反应；摸手还是 ＞＜ + 脸红
-      if (ev.type === 'tap' && isHand) {
+      } else if (ev.type === 'tap' && isHand) {
         const next = state.poses?.toggle('竖手指')
         toast(next === '竖手指' ? '竖手指' : '手放下')
         state.bubble?.say('hand', { ms: 2400 })
-      } else if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
+      } else if (ev.type === 'tap' && name && name !== '脸') {
+        state.reactions.apply(ev.region, 'tap')
+        const k = TOUCH_PHRASE[name]?.tap
+        if (k) state.bubble?.say(k, { ms: 2400 })
+      }
       if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) {
         state.reactions.apply(ev.region, 'pet')
-        // 脚 / 腰 = 被挠痒：痒痒的动作 + 躲痒台词
+        // 脚 / 腰 = 被挠痒：痒痒的动作 + 躲痒台词；其它部位按映射各说一句
         if (name === '脚' || name === '腰') {
           state.tickle?.start()
           state.bubble?.say('tickle', { ms: 2600 })
+        } else {
+          const k = TOUCH_PHRASE[name]?.pet
+          if (k) state.bubble?.say(k, { ms: 2600 })
         }
         // 摸到不同部位，嘴给一个对应的情绪（表情包只改眼/脸，嘴是我们这层驱动的）
         const mood = REGION_MOUTH[name]
@@ -861,9 +928,11 @@ function bootRegions() {
           // 正脸：视线回中，鼓脸才看得见
           state.gaze?.setTarget?.(0, 0)
           pinchExpressions(true)
+          state.bubble?.say('pinch', { ms: 2000 })
         } else if (ev.type === 'dragMove') {
           // ev.dx/dy 是模型坐标，换成客户端像素再交给捏脸层（maxPull 是按像素定的）
-          const k = state.stage?.model?.scale?.x || 1
+          // 镜像期间 scale.x 是负的，取绝对值，不然拖动方向会反
+          const k = Math.abs(state.stage?.model?.scale?.x || 1)
           state.facePinch?.move((ev.dx || 0) * k, (ev.dy || 0) * k)
         } else if (ev.type === 'up') {
           state.facePinch?.release()
@@ -1367,6 +1436,7 @@ async function stageRpc(op, payload) {
     return { reactions: reactionsSnapshot() }
   }
   if (op === 'patchExport') return exportStagePatch()
+  if (op === 'mode') return { mode: applyMode(payload?.name) }
   return null
 }
 window.__stageRpc = stageRpc
@@ -1400,7 +1470,6 @@ function applySettings(next) {
   const bubbleOn = state.settings.bubble !== false
   if (!bubbleOn && state.bubble?.visible) state.bubble.hide()
   else if (bubbleOn && !state.bubble?.visible && state.bubble?.text) state.bubble.show()
-  state.bubble?.setSide(state.settings.bubbleSide === 'left' ? 'left' : 'right')
   state.bubble?.setScale(bubbleScale())
   applyBorder(state.settings.border === true)
 
@@ -1502,6 +1571,12 @@ function installProbes({ motionState } = {}) {
     /** 痒痒的：立刻来一段（验证躲痒动作） */
     tickle() { state.tickle?.start(); return state.tickle?.state() ?? null },
     tickleState: () => state.tickle?.state() ?? null,
+    /** 模型三态：常态 / 爱心眼 / 黑框眼镜 */
+    mode(name) { return { mode: applyMode(name) } },
+    modeState: () => ({ mode: modeName, list: MODE_LIST }),
+    cycleMode: () => ({ mode: cycleMode() }),
+    /** 视口状态（含镜像 flipX，验证镜像摇摆用） */
+    viewport: () => ({ ...state.viewport?.view }),
     /** 摸胯神态（半睁眼 + 眯眼 + 八字眉）单独验证 */
     crotchFace(on = true) { crotchFace(on); return true },
     pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
@@ -1515,7 +1590,6 @@ function installProbes({ motionState } = {}) {
     },
     bubbleHide() { state.bubble?.hide() },
     bubbleState: () => state.bubble?.state() ?? null,
-    bubbleSide(side) { state.bubble?.setSide(side) },
     /** 说一句预设台词（thinking / working / waiting / success / error / head / hand …） */
     say(key, ms = 0) { return state.bubble?.say(key, { ms }) ?? null },
     /** 模拟一条 DSH 状态（不接插件时也能验证联动） */

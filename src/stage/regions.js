@@ -16,5 +16,5 @@
 // 实现按职责拆到 ./regions/ 下；这里保留原来的导出面，调用方无需改动。
 export { pointInPolygon, polygonBounds, convexHull } from './regions/geometry.js'
 export { createRegionStore } from './regions/store.js'
-export { faceRegions, createFaceZoneReader, createHandZoneReader, seedRegions } from './regions/zones.js'
+export { faceRegions, foreheadRegion, createFaceZoneReader, createHandZoneReader, seedRegions } from './regions/zones.js'
 export { createRegionInput } from './regions/input.js'

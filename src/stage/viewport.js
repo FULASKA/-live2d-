@@ -20,6 +20,9 @@ export function createViewport({ model, app, margin = 0.95 } = {}) {
     offsetY: 0,
     mode: 'contain', // contain | cover | height
     margin,
+    // 镜像：把模型水平翻转（「镜像摇摆」这类惊喜动效用），
+    // 反算坐标全走 model.scale.x 的符号，所以热区命中/气泡定位自动跟着翻，别在这里取绝对值
+    flipX: false,
   }
 
   const size = () => ({ w: app.screen.width || 1, h: app.screen.height || 1 })
@@ -41,7 +44,7 @@ export function createViewport({ model, app, margin = 0.95 } = {}) {
   function apply() {
     const { w, h } = size()
     const s = baseScale() * view.zoom
-    model.scale.set(s)
+    model.scale.set(view.flipX ? -s : s, s)
     model.position.set(w / 2 + (view.offsetX * w) / 2, h / 2 + (view.offsetY * h) / 2)
     return { scale: s, x: model.position.x, y: model.position.y }
   }

@@ -31,8 +31,31 @@ export function faceRegions({ core, internalModel, displayNames, canvas }) {
   return zonePoints(b)
 }
 
-/** 包围盒 → 左右两个下半脸椭圆（原几何，抽出来给缓存读取器复用） */
-function zonePoints({ minX, minY, maxX, maxY }) {
+/**
+ * 额头热区：脸包围盒的**上半段**（眼睛线以上），点一下切换 常态 / 爱心眼 / 眼镜。
+ * 层级给到 9：压过「头」(7) 和左/右脸(8)，额头才有独立点击。
+ */
+export function foreheadRegion({ core, internalModel, displayNames, canvas }) {
+  const W = canvas?.width || 3749
+  const H = canvas?.height || 7697
+  const indices = faceDrawableIndices(core, displayNames)
+  const b = faceBounds(indices, { core, internalModel, W, H })
+  if (!b) return []
+  return [{ name: '额头', z: 9, points: foreheadPoints(b) }]
+}
+
+/** 脸包围盒 → 上半段矩形（额头） */
+function foreheadPoints(b) {
+  const h = b.maxY - b.minY
+  const w = b.maxX - b.minX
+  const x0 = Math.round(b.minX + w * 0.1)
+  const x1 = Math.round(b.maxX - w * 0.1)
+  const y0 = Math.round(b.minY + h * 0.03)
+  const y1 = Math.round(b.minY + h * 0.44)   // 到眼睛线为止，不抢眼睛
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+}
+
+/** 包围盒 → 左右两个下半脸椭圆（原几何，抽出来给缓存读取器复用） */function zonePoints({ minX, minY, maxX, maxY }) {
   const top = minY + (maxY - minY) * 0.46 // 眼睛以上归头部热区
   const cx = (minX + maxX) / 2
   const cy = (top + maxY) / 2
@@ -127,6 +150,16 @@ export function createFaceZoneReader({ core, internalModel, displayNames, canvas
     /** 命中的 drawable 数量，探针用来确认映射正确 */
     count() {
       return indices ? indices.length : -1
+    },
+    /** 额头热区（跟脸一起重算；拿不到返回 null，调用方保留旧几何） */
+    readForehead() {
+      const s = `${core.getDrawableCount()}/${core.getPartCount()}`
+      if (!indices || s !== sig) {
+        indices = faceDrawableIndices(core, displayNames)
+        sig = s
+      }
+      const b = faceBounds(indices, { core, internalModel, W, H })
+      return b ? foreheadPoints(b) : null
     },
   }
 }

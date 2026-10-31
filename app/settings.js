@@ -66,9 +66,6 @@ function paint() {
   $('#pad-y-readout').textContent = `${Math.round(padY * 100)}%`
   setCheck('#top', !!settings.alwaysOnTop)
   setCheck('#click-through', !!settings.clickThrough)
-  if (document.activeElement !== $('#bubble-side')) {
-    $('#bubble-side').value = settings.bubbleSide === 'left' ? 'left' : 'right'
-  }
 }
 
 function setRange(sel, v) {
@@ -112,7 +109,11 @@ function wire() {
     pushSettingsSoon({ idleSpeed: s })
   }
   $('#bubble-on').onchange = (e) => pushSettings({ bubble: !!e.target.checked })
-  $('#bubble-side').onchange = (e) => pushSettings({ bubbleSide: e.target.value === 'left' ? 'left' : 'right' })
+  // 模型三态：走舞台的 stageRpc（表情层在舞台里，不在设置窗口）
+  const setMode = (name) => rpc('mode', { name }).then((v) => { if (v) status('表情：' + (v.mode || name)) })
+  $('#mode-normal').onclick = () => setMode('常态')
+  $('#mode-heart').onclick = () => setMode('爱心眼')
+  $('#mode-glasses').onclick = () => setMode('黑框眼镜')
   $('#border').onchange = (e) => pushSettings({ border: !!e.target.checked })
   $('#pad-y').oninput = (e) => {
     const v = Number(e.target.value)
