@@ -112,9 +112,10 @@ export function createLife({ param, options = {} } = {}) {
     gustEnd = performance.now() + Math.max(0, Number(ms) || 0)
   }
 
-  /** 耳朵扑棱一次（side: 'L' | 'R'，amp 0..1.5） */
-  function flap(side = 'L', amp = 1) {
-    flip = { t: 0, dur: 0.62, side: side === 'R' ? 'R' : 'L', amp: clamp(amp, 0, 1.5) }
+  /** 耳朵扑棱一次（side: 'L' | 'R' | 'B' 两只一起，amp 0..1.5，dur 单次时长秒） */
+  function flap(side = 'L', amp = 1, dur = 0.62) {
+    const s = side === 'R' ? 'R' : side === 'B' ? 'B' : 'L'
+    flip = { t: 0, dur: clamp(Number(dur) || 0.62, 0.12, 2), side: s, amp: clamp(amp, 0, 1.5) }
     nextFlip = cfg.earMin + Math.random() * (cfg.earMax - cfg.earMin)
     flips += 1
   }
@@ -229,8 +230,9 @@ export function createLife({ param, options = {} } = {}) {
     for (const id of JEWEL.R) add(id, clamp(-vel.x * 0.0009, -0.4, 0.4) * cfg.jewelAmp + wx * 0.4 + gx)
 
     const tremor = Math.sin(t * 7.3) * cfg.earTremor
-    const eL = (earSide === 'L' ? earEnv * cfg.earAmp : 0) + tremor
-    const eR = (earSide === 'R' ? earEnv * cfg.earAmp : 0) + tremor
+    const both = earSide === 'B'
+    const eL = (earSide === 'L' || both ? earEnv * cfg.earAmp : 0) + tremor
+    const eR = (earSide === 'R' || both ? earEnv * cfg.earAmp : 0) + tremor
     EARS.L.forEach((id, i) => add(id, (eL + fz + gy * 0.6) * (1 - i * 0.18))) // 越靠尖越滞后，做出鞭状
     EARS.R.forEach((id, i) => add(id, (eR + fz + gy * 0.6) * (1 - i * 0.18)))
 

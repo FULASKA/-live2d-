@@ -14,7 +14,7 @@
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
-export function createFacePinch({ param, bus, options = {} } = {}) {
+export function createFacePinch({ param, bus, life, options = {} } = {}) {
   const cfg = {
     maxPull: 260,        // 拖动多少像素算拉满
     // 响应曲线 pow>1：**前段更钝**。原来 0.62 时轻拖 30px 就跳到 35%，
@@ -26,6 +26,10 @@ export function createFacePinch({ param, bus, options = {} } = {}) {
     side: 1,             // 单边鼓脸比例
     wiggleHz: 3.2,
     wiggle: 0.25,
+    // 捏脸时耳朵快速扑棱 + 身体/尾巴快速小摆（「不舒服但不讨厌」的可爱感）
+    flapEvery: 0.16,
+    flapAmp: 0.75,
+    bodyWiggle: 2.2,
     pucker: 0.35,        // 被捏时撅嘴（加强「被捏住」的可读性）
     headTurn: 18,       // 拉满时头的额外偏转角度（@maxPull 像素）
     maxHeadTurn: 20,    // 上限
@@ -42,6 +46,8 @@ export function createFacePinch({ param, bus, options = {} } = {}) {
   let mag = 0          // 归一化 0..1（平滑后）
   let target = 0
   let phase = 0
+  let flapT = 0
+  let flapN = 0
   const writes = {}
   let testSide = null
   // 捏脸时头的跟随偏向（累积位移，松手回零）
@@ -141,6 +147,19 @@ export function createFacePinch({ param, bus, options = {} } = {}) {
     if (has('CheeckPuffL')) writeFrac('CheeckPuffL', side === 'R' ? m * cfg.side : 0)
     if (has('CheeckPuffR')) writeFrac('CheeckPuffR', side === 'L' ? m * cfg.side : 0)
     if (has('CheeksWiggleX')) writeAbs('CheeksWiggleX', wiggleAmt)
+    // 脸盘抖动 X< / X>：反向再叠一层，整张脸「被捏住还在挣扎」
+    if (has('CheeksWiggleXR')) writeAbs('CheeksWiggleXR', -wiggleAmt)
+    if (has('CheeksWiggleXL')) writeAbs('CheeksWiggleXL', wiggleAmt * 0.6)
+    // 耳朵快速扑棱 + 身体（连带尾巴）快速小摆：不舒服但不讨厌
+    if (m > 0.12) {
+      flapT -= dt
+      if (flapT <= 0) {
+        flapT = cfg.flapEvery
+        flapN += 1
+        try { life?.flap?.(flapN % 2 ? 'L' : 'R', cfg.flapAmp * Math.min(1, m * 2), cfg.flapEvery * 0.9) } catch {}
+      }
+      add('ParamBodyAngleZ', Math.sin(phase * 1.7) * cfg.bodyWiggle * m)
+    }
     // 被捏住时撅一下嘴：脸的参数变化本来就弱，嘴一动「被捏住」立刻就成立了
     if (has('Mouthpucker')) add('Mouthpucker', m * cfg.pucker)
 

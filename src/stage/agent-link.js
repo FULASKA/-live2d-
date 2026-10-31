@@ -13,6 +13,8 @@
 const EXPR_OF = {
   thinking: '屑屑眼',
   waiting: '＞＜',
+  // 干活期间全程「加载」表情：表示正在忙，别以为她走神了
+  working: '加载',
   error: '流冷汗',
 }
 // 收工那一下要「举手指 + 兔嘴 + 戴眼镜」：多表情叠一层，比单个爱心眼更像在邀功
@@ -68,10 +70,15 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
     if (!state) {
       clearExpression()
       if (successMood) { try { mouth?.clearMood() } catch {}; successMood = false }
+      try { bubble?.unlock?.('agent') } catch {}
       scheduleHide(1200)
       try { onState?.(null) } catch {}
       return
     }
+
+    // 干活期间把气泡占住：待机台词 / 互动台词 / 外部 say 都顶不掉它
+    const busy = state === 'thinking' || state === 'working' || state === 'waiting'
+    try { busy ? bubble?.lock?.('agent') : bubble?.unlock?.('agent') } catch {}
 
     try { onState?.(state) } catch {}
     setExpressions(EXPRS_OF[state] ?? EXPR_OF[state] ?? null)
@@ -83,7 +90,7 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
       try { mouth?.clearMood() } catch {}
       successMood = false
     }
-    bubble?.say(state)
+    bubble?.say(state, { owner: busy ? 'agent' : null })
     // 状态一变，耳朵扑棱一下（小动作，不抢气泡）
     try { life?.flap(Math.random() < 0.5 ? 'L' : 'R', 0.8) } catch {}
 

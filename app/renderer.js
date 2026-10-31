@@ -6,6 +6,7 @@ import { createViewport } from '../src/stage/viewport.js'
 import { createGaze } from '../src/stage/gaze.js'
 import { createPoseBus } from '../src/stage/pose-bus.js'
 import { createIdleMotions } from '../src/stage/idle-motions.js'
+import { createTickle } from '../src/stage/tickle.js'
 import { createRegionStore, createRegionInput, seedRegions, faceRegions, createFaceZoneReader, createHandZoneReader } from '../src/stage/regions.js'
 import { createReactions, DEFAULT_REACTIONS } from '../src/stage/reactions.js'
 import { createPetSway } from '../src/stage/pet-sway.js'
@@ -32,7 +33,7 @@ const TOGGLE_SET = new Set(['胸口衣服', '裙子切换', '脱鞋', '尾巴开
  */
 const REGION_MOUTH = {
   胸: { open: 0.04, form: -0.45, ms: 2400 },
-  腰: { open: 0.10, form: -0.35, ms: 2600 },
+  腰: { open: 0.42, form: 0.5, smile: 0.8, ms: 2800 },    // 被挠痒：和脚一样忍不住笑
   裙摆: { open: 0.08, form: -0.62, ms: 3200 },          // 嫌弃：嘴角下撇、不情愿地微张嘴
   腿: { open: 0.26, form: 0.10, funnel: 0.30, ms: 2600 }, // 发晕：嘴微微张开、有点呆
   脚: { open: 0.50, form: 0.55, smile: 0.85, ms: 3200 },  // 被挠痒：忍不住笑出来
@@ -396,23 +397,31 @@ async function bootStage() {
     options: { gain: Number(state.settings.petGain ?? 1.6) },
   })
 
-  // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘
   // 伪面捕驱动：把「我们的姿态」翻译成模型的**面捕捉取通道**
   // （AngleX/Y/Z、PositionX/Y、ParamBreath、JawOpen…），物理链才会整条活起来
   state.capture = createCapture({ param: stage.param, bus: state.poseBus })
+
+  // 活气层：耳朵扑棱 / 头发惯性 / 耳环摆动（读回物理值再叠加，写在物理之后）
+  // 要早于捏脸创建 —— 捏脸时借它做「耳朵快速扑棱」
+  state.life = createLife({ param: stage.param })
 
   // 捏脸：按住「脸」热区拖动 → 鼓脸/单边鼓/抖脸盘 + 身体前倾放大
   state.facePinch = createFacePinch({
     param: stage.param,
     bus: state.poseBus,
+    life: state.life,
     options: {
       // 用户手动开了「前倾」时，捏脸就不再抢 LeanInput
       leanBlocked: () => !!state.layers?.hasExpression('前倾'),
     },
   })
 
-  // 活气层：耳朵扑棱 / 头发惯性 / 耳环摆动（读回物理值再叠加，写在物理之后）
-  state.life = createLife({ param: stage.param })
+  // 痒痒的：摸脚 / 摸腰时的躲痒小动作（胸腔骨盆快抖 + 两侧小臂摆 + 两只耳朵扑腾）
+  state.tickle = createTickle({
+    bus: state.poseBus,
+    life: state.life,
+    onHold: (id, v) => { if (v == null) state.layers?.release(id); else state.layers?.hold(id, v) },
+  })
   // 嘴：呼吸微动 + 说话音节（模型 LipSync 组是空的，这是唯一驱动源）
   state.mouth = createMouth({ param: stage.param })
   // 随机小表情：笑 / 吐舌头 / 吐舌头+单眼笑，待机时自己冒出来
@@ -527,6 +536,8 @@ async function bootStage() {
       state.posture?.apply(frameDt)
       // 待机动作：常驻微摆 + 随机成套动作（叠加在同一份姿态里）
       state.idle?.apply(frameDt)
+      // 痒痒的：躲痒小动作（摸脚/摸腰时）
+      state.tickle?.apply(frameDt)
       // 姿态摆好之后，翻译成面捕捉取通道（物理要吃的就是这些）
       state.capture?.apply(frameDt)
     })
@@ -603,6 +614,26 @@ function pinchExpressions(on) {
     const def = (state.caps.expressions || []).find((e) => e.name === n)
     if (def) state.layers.addExpression(n, def.params, { source: 'pinch' })
   }
+}
+
+/**
+ * 摸胯时的神态：眼睛只睁一半 + 眯眼 + 眉毛「\ /」+ 瞳孔收紧。
+ * （模型没有「瞳孔缩放」参数，只有 PupilX/PupilY 透视位移，所以缩瞳用眯眼 + 收缩上下眼睑近似）
+ */
+const CROTCH_FACE = [
+  { Id: 'ParamEyeLOpen', Value: 0.52, Blend: 'Overwrite' },
+  { Id: 'ParamEyeROpen', Value: 0.52, Blend: 'Overwrite' },
+  { Id: 'LEyeSquint', Value: 0.35, Blend: 'Add' },
+  { Id: 'REyeSquint', Value: 0.35, Blend: 'Add' },
+  { Id: 'ParamBrowLY', Value: -0.25, Blend: 'Add' },
+  { Id: 'ParamBrowRY', Value: -0.25, Blend: 'Add' },
+  { Id: 'ParamBrowLAngle', Value: -0.8, Blend: 'Add' },
+  { Id: 'ParamBrowRAngle', Value: 0.8, Blend: 'Add' },
+]
+function crotchFace(on) {
+  if (!state.layers) return
+  if (!on) { try { state.layers.removeSource('crotch-face') } catch {}; return }
+  try { state.layers.addExpression('胯部神态', CROTCH_FACE, { source: 'crotch-face', fade: 0.28 }) } catch {}
 }
 
 /**
@@ -775,6 +806,9 @@ function bootRegions() {
       if (name === '胯' && ev.type === 'pet' && ev.step === 1) {
         state.poses?.set('护胯', 340, { holdExtras: true })
         state.bubble?.say('crotch', { ms: 4200 })
+        crotchFace(true)
+        clearTimeout(state.crotchFaceHold)
+        state.crotchFaceHold = setTimeout(() => crotchFace(false), 4200)
         clearTimeout(state.crotchHold)
         state.crotchHold = setTimeout(() => { state.poses?.release(420) }, 4200)
       }
@@ -786,6 +820,11 @@ function bootRegions() {
       } else if (ev.type === 'tap' && name && name !== '脸') state.reactions.apply(ev.region, 'tap')
       if (ev.type === 'pet' && name && name !== '脸' && ev.step === 1) {
         state.reactions.apply(ev.region, 'pet')
+        // 脚 / 腰 = 被挠痒：痒痒的动作 + 躲痒台词
+        if (name === '脚' || name === '腰') {
+          state.tickle?.start()
+          state.bubble?.say('tickle', { ms: 2600 })
+        }
         // 摸到不同部位，嘴给一个对应的情绪（表情包只改眼/脸，嘴是我们这层驱动的）
         const mood = REGION_MOUTH[name]
         if (mood) state.mouth?.setMood(mood, mood.ms)
@@ -1449,6 +1488,11 @@ function installProbes({ motionState } = {}) {
     idleList: () => state.idle?.routines() ?? [],
     idlePlay(name) { return state.idle?.trigger(name) ?? null },
     idleState: () => state.idle?.state() ?? null,
+    /** 痒痒的：立刻来一段（验证躲痒动作） */
+    tickle() { state.tickle?.start(); return state.tickle?.state() ?? null },
+    tickleState: () => state.tickle?.state() ?? null,
+    /** 摸胯神态（半睁眼 + 眯眼 + 八字眉）单独验证 */
+    crotchFace(on = true) { crotchFace(on); return true },
     pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
     poseState: () => state.poses?.state() ?? null,
     /** 气泡：说一句 / 换文字 / 收起 / 读状态（验证自适应排版用） */

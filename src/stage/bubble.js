@@ -27,6 +27,8 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
   let lastKey = ''
   let hideTimer = 0
   let anchorSide = side === 'left' ? 'left' : 'right'
+  // 气泡占用锁：agent 在干活时锁住，别的来源（待机台词 / 互动台词 / 外部 say）说不进去
+  let lockOwner = null
   // 与窗口/角色同一比例：窗口变大，气泡的字号、内边距、尾巴一起变大
   let scale = 1
   el.style.setProperty('--bs', '1')
@@ -133,6 +135,8 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
       if (visible) { layout(t); place() }
     },
     show(text, opts = {}) {
+      // 被锁住时：只有锁的主人能改字（防止待机台词 / 互动台词把 agent 的进度顶掉）
+      if (lockOwner && opts.owner !== lockOwner) return
       if (text != null) this.set(text, opts)
       visible = true
       el.classList.add('on')
@@ -146,16 +150,21 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
       el.classList.remove('on')
     },
     /** 说一句预设台词（key 见 phrases.js：thinking / working / waiting / success / error / head / hand …） */
-    say(key, { ms = 0 } = {}) {
+    say(key, { ms = 0, owner = null } = {}) {
+      if (lockOwner && owner !== lockOwner) return null
       const line = pickPhrase(key, lastKey === key ? lastText : '')
       lastKey = key
-      this.show(line, { state: key })
+      this.show(line, { state: key, owner })
       if (ms > 0) {
         clearTimeout(hideTimer)
         hideTimer = setTimeout(() => { if (lastKey === key) this.hide() }, ms)
       }
       return line
     },
+    /** 占用气泡（agent 干活期间）：别人说不进来，直到 unlock */
+    lock(owner = 'agent') { lockOwner = owner },
+    unlock(owner = 'agent') { if (lockOwner && owner === lockOwner) lockOwner = null },
+    get locked() { return lockOwner },
     /** 位置依赖角色位置，角色一动（拖窗口/换尺寸）就重排 */
     reposition() { if (visible) place() },
     /** 挂在头的左侧还是右侧（设置里可切） */
