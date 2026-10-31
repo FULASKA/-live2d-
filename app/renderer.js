@@ -1228,6 +1228,8 @@ function fitSize() {
 }
 
 let fitTimer = 0
+// 上一次已经下发过的窗口尺寸：尺寸没变就不再发 IPC（以前每 100ms 发一次，主进程每发一次都会把窗口挪 1px）
+let lastFitSize = { w: 0, h: 0 }
 const BODY_BANDS = ['头', '胸', '腰', '裙摆', '腿', '脚']
 
 /**
@@ -1280,7 +1282,10 @@ function applyFit(now = false) {
     fitTimer = 0
     const o = centerOffsets()
     state.viewport?.set({ zoom: 1, offsetX: o.x, offsetY: o.y })
-    shell.fit?.(size.w, size.h)
+    if (size.w !== lastFitSize.w || size.h !== lastFitSize.h) {
+      lastFitSize = { w: size.w, h: size.h }
+      shell.fit?.(size.w, size.h)
+    }
     state.bubble?.reposition()
   }
   clearTimeout(fitTimer)

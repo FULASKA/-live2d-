@@ -17,7 +17,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = path.join(ROOT, 'dist')
 const APP_NAME = '大肥鱼Live2d桌宠'
 // 完整版内置模型；发布版不含模型（原作者禁止二次分发）
-const MODEL_SRC = process.env.STAGE_MODEL_SRC || 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek'
+// 模型源目录用环境变量给，不在源码里写死任何本机路径：
+//   STAGE_MODEL_SRC="D:\模型\大肥鱼" npm run pack
+const MODEL_SRC = process.env.STAGE_MODEL_SRC || ''
 const ELECTRON_VERSION = '33.4.11'
 
 // 仓库根下这些目录不打进应用；node_modules 里的同名段落一律保留
@@ -92,10 +94,14 @@ async function main() {
   try { await cp(path.join(ROOT, '挂载模型.cmd'), path.join(appDir, '挂载模型.cmd')) } catch {}
 
   // ① 完整版内置模型：放在 exe 旁边的 model/（相对路径，用户可直接替换/管理）
-  try {
-    await cp(MODEL_SRC, path.join(appDir, 'model'), { recursive: true })
-    console.log('[pack] 已内置模型 →', path.join(appDir, 'model'))
-  } catch (e) { console.warn('[pack] 模型拷贝失败：', e.message) }
+  if (MODEL_SRC) {
+    try {
+      await cp(MODEL_SRC, path.join(appDir, 'model'), { recursive: true })
+      console.log('[pack] 已内置模型 →', path.join(appDir, 'model'))
+    } catch (e) { console.warn('[pack] 模型拷贝失败：', e.message) }
+  } else {
+    console.log('[pack] 未指定 STAGE_MODEL_SRC，跳过内置模型（只出发布版）')
+  }
 
   // ② 发布版：复制整包后删掉模型目录
   const pubDir = path.join(OUT, `${APP_NAME}-发布版-win32-x64`)

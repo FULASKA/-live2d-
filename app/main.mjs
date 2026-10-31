@@ -23,8 +23,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 if (process.env.STAGE_HOME) { try { mkdirSync(process.env.STAGE_HOME, { recursive: true }); app.setPath('userData', process.env.STAGE_HOME) } catch {} }
 // 启动参数：--model "路径\model3.json"（自动化安装 / 快捷方式用）
 const ARG_MODEL = (() => { const i = process.argv.indexOf('--model'); return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : null })()
-const DEV_MODEL = 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大肥鱼.model3.json'
 // 模型目录：放在 exe 旁边的 model/（完整版内置；发布版用户把自己的模型丢进去即可，不用配绝对路径）
+// 不再内置任何开发机绝对路径：开发时用设置里的路径 / --model / STAGE_MODEL 即可
 const EXE_DIR = path.dirname(app.getPath('exe'))
 const MODEL_DIRS = [path.join(EXE_DIR, 'model'), path.join(ROOT, 'model')]
 
@@ -44,13 +44,12 @@ function fromSettings() {
   return existsSync(abs) ? abs : null
 }
 
-/** 解析模型路径：设置 → exe 旁 model/ → 包内 resources/app/model → 环境变量 → 开发机内置 */
+/** 解析模型路径：设置 → exe 旁 model/ → 包内 resources/app/model → 环境变量 */
 function resolveModel() {
   const fromCfg = fromSettings()
   if (fromCfg) return fromCfg
   for (const dir of MODEL_DIRS) { const f = pickModelIn(dir); if (f) return f }
   if (process.env.STAGE_MODEL && existsSync(process.env.STAGE_MODEL)) return process.env.STAGE_MODEL
-  if (existsSync(DEV_MODEL)) return DEV_MODEL
   return null
 }
 
@@ -295,22 +294,22 @@ function wireFit() {
     const W = Math.max(180, Math.round(Number(size.w) || 0))
     const H = Math.max(220, Math.round(Number(size.h) || 0))
     const b = win.getBounds()
-    const cx = Math.round(b.x + b.width / 2)
-    const cy = Math.round(b.y + b.height / 2)
-    const { workArea } = screen.getDisplayNearestPoint({ x: cx, y: cy })
+    if (process.env.STAGE_DEBUG_MOVE) console.log('[fit]', JSON.stringify({ from: [b.x, b.y, b.width, b.height], want: [W, H] }))
+    // 尺寸没变就什么都不做：以前这里会用「四舍五入后的中心」重算位置，
+    // 605 这种奇数宽 +1px/次 地累积，窗口就会以 5px/s 缓慢漂移。
+    if (b.width === W && b.height === H) return
+    const cx = b.x + b.width / 2
+    const cy = b.y + b.height / 2
+    const { workArea } = screen.getDisplayNearestPoint({ x: Math.round(cx), y: Math.round(cy) })
     const x = Math.min(Math.max(Math.round(cx - W / 2), workArea.x), workArea.x + workArea.width - W)
     const y = Math.min(Math.max(Math.round(cy - H / 2), workArea.y), workArea.y + workArea.height - H)
-    if (b.width !== W || b.height !== H || b.x !== x || b.y !== y) {
-      win.setBounds({ x, y, width: W, height: H })
-      // 只有尺寸真的变了才落盘 + 广播：否则「广播 → 渲染层重新 fit → 又广播」会打成死循环，
-      // 每次循环都会把渲染层按轮廓做的居中修正冲掉。
-      settings.width = W
-      settings.height = H
-      settings.x = x
-      settings.y = y
-      saveSettings()
-      broadcastSettings()
-    }
+    win.setBounds({ x, y, width: W, height: H })
+    settings.width = W
+    settings.height = H
+    settings.x = x
+    settings.y = y
+    saveSettings()
+    broadcastSettings()
   })
 }
 
@@ -408,6 +407,7 @@ function wireIpc() {
   })
   ipcMain.on('win:move', (_e, { dx = 0, dy = 0 } = {}) => {
     if (!win) return
+    if (process.env.STAGE_DEBUG_MOVE) console.log('[move]', dx, dy)
     const [x, y] = win.getPosition()
     win.setPosition(Math.round(x + dx), Math.round(y + dy))
   })

@@ -11,8 +11,12 @@ const arg = (k, d) => {
 
 const PORT = Number(arg('port', 53180))
 const TOKEN = arg('token', 'dev-token')
-const MODEL = arg('model', 'C:/Users/33153/Desktop/DeepSeek免费公皮/DeepSeek/大肥鱼.model3.json')
+const MODEL = arg('model', process.env.STAGE_MODEL || '')
 const VERBOSE = process.argv.includes('--log')
+if (!MODEL) {
+  console.error('缺少模型路径：用 --model "D:\\模型\\xxx.model3.json" 或环境变量 STAGE_MODEL 指定')
+  process.exit(2)
+}
 
 const srv = await createStageServer({ root: ROOT, model: MODEL, token: TOKEN, verbose: VERBOSE, port: PORT })
 const cap = srv.capabilities
