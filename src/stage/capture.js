@@ -19,9 +19,9 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 
 export function createCapture({ param, bus, options = {} } = {}) {
   const cfg = {
-    breathHz: 0.23,      // 呼吸频率（次/秒的一半，慢一点更自然）
-    breathBase: 0.32,    // 呼吸基线 0..1
-    breathAmp: 0.26,     // 呼吸振幅
+    breathHz: 0.19,      // 呼吸频率（次/秒的一半，慢一点更自然）
+    breathBase: 0.5,     // 呼吸基线 0..1（原来 0.32 太浅，胸口几乎看不出来）
+    breathAmp: 0.4,      // 呼吸振幅（0.1~0.9 摆动，胸口/前发/裙摆都跟着走）
     tiltGain: 1,         // AngleZ ← ParamAngleZ（纯物理通道：耳朵/发梢的主要驱动）
     pitchGain: 0.4,      // AngleY ← ParamAngleY（视觉上也绑了，所以只补一部分）
     yawGain: 0.4,        // AngleX ← ParamAngleX
@@ -33,7 +33,12 @@ export function createCapture({ param, bus, options = {} } = {}) {
   const ranges = new Map()
   const rng = (id) => {
     let r = ranges.get(id)
-    if (r === undefined) { const i = param.info(id); r = i ? [i.min, i.max, i.default] : null; ranges.set(id, r) }
+    if (r === undefined) {
+      const i = param.info(id)
+      // 不缓存「没查到」：首帧 Core 还没就绪时若缓存 null，这一路就永久失效
+      r = i ? [i.min, i.max, i.default] : null
+      if (r) ranges.set(id, r)
+    }
     return r
   }
   const setIn = (id, v) => {

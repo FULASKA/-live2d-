@@ -51,6 +51,12 @@ export function createLife({ param, options = {} } = {}) {
     jewelAmp: 0.3,       // 耳环摆动
     impFollow: 9,        // 拖动加速度的跟随速度（1/s）
     impGain: 0.00012,    // 加速度 → 毛发偏移（主要是补味道；主受力交给模型的 Position 物理）
+    // 眨眼：乘在已经写好的 eye 开合上（表情闭眼时 0×k 仍是 0，不会「眨开」）
+    blink: true,
+    blinkMin: 2.4,       // 两次眨眼的最短/最长间隔（秒）
+    blinkMax: 5.6,
+    blinkDur: 0.16,      // 单次闭→睁时长
+    blinkDouble: 0.18,   // 连眨两下的概率
     ...options,
   }
 
@@ -82,6 +88,14 @@ export function createLife({ param, options = {} } = {}) {
   let nextFlip = cfg.earMin + Math.random() * 3
   let flips = 0
   let lastEar = 0
+  const EYES = ['ParamEyeLOpen', 'ParamEyeROpen']
+  let nextBlink = cfg.blinkMin + Math.random() * (cfg.blinkMax - cfg.blinkMin)
+  let blink = null              // { t, dur, again }
+  let blinkAgain = 0
+  let blinks = 0
+  let lastBlink = null
+  let gustAmp = 0
+  let gustEnd = 0
   // 外部拖动加速度 → 毛发/耳环像被惯性甩出去
   const ext = { ax: 0, ay: 0 }
   const imp = { x: 0, y: 0, vx: 0, vy: 0 }
@@ -92,11 +106,58 @@ export function createLife({ param, options = {} } = {}) {
     ext.ay = clamp(ay, -9000, 9000)
   }
 
+  /** 一阵风（吹狗尾草这类）：放大头发/耳朵的风摆，末尾 600ms 自然收住 */
+  function gust(amp = 2, ms = 2600) {
+    gustAmp = clamp(Number(amp) || 0, 0, 5)
+    gustEnd = performance.now() + Math.max(0, Number(ms) || 0)
+  }
+
   /** 耳朵扑棱一次（side: 'L' | 'R'，amp 0..1.5） */
   function flap(side = 'L', amp = 1) {
     flip = { t: 0, dur: 0.62, side: side === 'R' ? 'R' : 'L', amp: clamp(amp, 0, 1.5) }
     nextFlip = cfg.earMin + Math.random() * (cfg.earMax - cfg.earMin)
     flips += 1
+  }
+
+  /** 眨眼：写 eye 开合参数（乘在表情/待机层之后，闭眼表情不会被眨开） */
+  function blinkStep(dt) {
+    if (!cfg.blink) return
+    if (blinkAgain > 0) {
+      blinkAgain -= dt
+      if (blinkAgain <= 0) blink = { t: 0, dur: cfg.blinkDur, again: false }
+    }
+    if (!blink) {
+      nextBlink -= dt
+      if (nextBlink <= 0) {
+        blink = { t: 0, dur: cfg.blinkDur, again: Math.random() < cfg.blinkDouble }
+        nextBlink = cfg.blinkMin + Math.random() * (cfg.blinkMax - cfg.blinkMin)
+        blinks += 1
+      }
+    }
+    if (!blink) return
+    blink.t += dt
+    const p = blink.t / blink.dur
+    if (p >= 1) {
+      if (blink.again) blinkAgain = 0.17
+      blink = null
+      return
+    }
+    // 三角波：0.38 处闭合到底，最低留 0.04（全闭到底反而像翻白眼）
+    const k = p < 0.38 ? 1 - (p / 0.38) * 0.96 : 0.04 + ((p - 0.38) / 0.62) * 0.96
+    for (const id of EYES) {
+      const cur = param.get(id)
+      if (cur == null) continue
+      const r = rng(id)
+      param.set(id, clamp(cur * k, r ? r[0] : 0, r ? r[1] : 1))
+      if (id === EYES[0]) lastBlink = { k: +k.toFixed(2), before: +Number(cur).toFixed(2), after: +Number(param.get(id)).toFixed(2) }
+    }
+  }
+
+  /** 立刻眨一次（QA / 表情配合用） */
+  function blinkNow() {
+    blink = { t: 0, dur: cfg.blinkDur, again: false }
+    nextBlink = cfg.blinkMin + Math.random() * (cfg.blinkMax - cfg.blinkMin)
+    blinks += 1
   }
 
   function apply(dtMs = 1000 / 60) {
@@ -117,10 +178,15 @@ export function createLife({ param, options = {} } = {}) {
     if (cy != null) prev.y = cy
     if (cx != null) prev.x = cx
 
-    // 微风：两个不同频率叠加，避免看出周期
+    // 微风：两个不同频率叠加，避免看出周期；gust 期间整体放大（吹狗尾草）
     const wPhase = windPhase + t * cfg.windSpeed
-    const wy = Math.sin(wPhase) * cfg.windAmp + Math.sin(wPhase * 1.7 + 1.3) * cfg.windAmp * 0.55
-    const wx = Math.sin(wPhase * 1.23 + 0.7) * cfg.windAmpX + Math.sin(wPhase * 0.61) * cfg.windAmpX * 0.6
+    let wy = Math.sin(wPhase) * cfg.windAmp + Math.sin(wPhase * 1.7 + 1.3) * cfg.windAmp * 0.55
+    let wx = Math.sin(wPhase * 1.23 + 0.7) * cfg.windAmpX + Math.sin(wPhase * 0.61) * cfg.windAmpX * 0.6
+    const gustK = gustAmp * clamp((gustEnd - performance.now()) / 600, 0, 1)
+    if (gustK > 0) {
+      wy = wy * (1 + gustK) + Math.sin(wPhase * 2.7) * 0.018 * gustK
+      wx = wx * (1 + gustK * 1.3)
+    }
 
     // 惯性：往反方向拖一点，越转得快越明显
     const iy = clamp(-vel.y * 0.0012 * cfg.inertiaY, -0.32, 0.32)
@@ -167,10 +233,12 @@ export function createLife({ param, options = {} } = {}) {
     const eR = (earSide === 'R' ? earEnv * cfg.earAmp : 0) + tremor
     EARS.L.forEach((id, i) => add(id, (eL + fz + gy * 0.6) * (1 - i * 0.18))) // 越靠尖越滞后，做出鞭状
     EARS.R.forEach((id, i) => add(id, (eR + fz + gy * 0.6) * (1 - i * 0.18)))
+
+    blinkStep(dt)
   }
 
   return {
-    apply, flap, motion,
+    apply, flap, gust, motion, blinkNow,
     set(patch = {}) { Object.assign(cfg, patch) },
     options: cfg,
     state: () => ({
@@ -181,6 +249,10 @@ export function createLife({ param, options = {} } = {}) {
       earEnv: Math.round(lastEar * 100) / 100,
       flips,
       nextIn: Math.round(nextFlip * 10) / 10,
+      blink: !!blink,
+      blinks,
+      lastBlink,
+      gust: Math.round(gustAmp * 100) / 100,
     }),
   }
 }

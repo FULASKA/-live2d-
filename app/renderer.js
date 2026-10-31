@@ -261,6 +261,7 @@ async function main() {
       expressions: state.caps.expressions || [],
       poses: state.poses,
       life: state.life,
+      mouth: state.mouth,
     })
     shell.onAgentStatus?.((snap) => {
       // 外部指令刚说过的台词有优先权（时长见 applyAction 的 say）
@@ -424,6 +425,21 @@ async function bootStage() {
     life: state.life,
     idleFaces: state.idleFaces,
     options: { enabled: state.settings.idle !== false, speed: Number(state.settings.idleSpeed ?? 1) },
+    // 成套动作的「道具」：姿势 / 表情 / 嘴型 / 风，开始时挂上、结束时撤掉
+    onStart: (name, r) => {
+      if (r.pose) state.poses?.set(r.pose, 360)
+      for (const n of r.exprs || []) {
+        const def = (state.caps.expressions || []).find((e) => e.name === n)
+        if (def) state.layers?.addExpression(n, def.params, { source: 'idle-exp', fade: 0.28 })
+      }
+      if (r.mouth) state.mouth?.setMood(r.mouth, r.ms)
+      if (r.gust) state.life?.gust?.(r.gust, r.ms)
+    },
+    onFinish: (name, r) => {
+      if (r.pose) state.poses?.release(420)
+      if (r.exprs?.length) state.layers?.removeSource('idle-exp')
+      if (r.mouth) state.mouth?.clearMood()
+    },
     // 小台词用气泡；正在显示 DSH 状态（thinking/working/…）时不抢话
     onLine: (text, ms = 4200) => {
       const b = state.bubble
@@ -1501,6 +1517,13 @@ function installProbes({ motionState } = {}) {
     refreshMask,
     // 表情/姿势层现状（排查「动作被谁盖了」用）
     layers: () => state.layers?.inspect?.() ?? null,
+    // 活气层：眨眼计数 / 耳朵 / 风；伪面捕：呼吸值
+    life: () => state.life?.state?.() ?? null,
+    capture: () => state.capture?.state?.() ?? null,
+    captureSet: (patch) => state.capture?.set(patch) ?? null,
+    blink: () => state.life?.blinkNow?.() ?? null,
+    lifeSet: (patch) => state.life?.set?.(patch) ?? null,
+    gust: (amp = 2, ms = 2600) => state.life?.gust?.(amp, ms) ?? null,
     sway: (name) => state.petSway?.trigger(name),
     charRight: () => Math.round(charRightClient()),
     face: () => state.facePinch?.state() ?? null,
@@ -1629,7 +1652,7 @@ function installProbes({ motionState } = {}) {
     captureOff(on = true) {
       state.capture?.set(on
         ? { breathAmp: 0, yawGain: 0, pitchGain: 0, tiltGain: 0, posGain: 0, jawFromMouth: 0 }
-        : { breathAmp: 0.006, yawGain: 0.4, pitchGain: 0.4, tiltGain: 1, posGain: 1, jawFromMouth: 1 })
+        : { breathAmp: 0.4, yawGain: 0.4, pitchGain: 0.4, tiltGain: 1, posGain: 1, jawFromMouth: 1 })
       return state.capture?.options ?? null
     },
     /** 手动给一个跟随目标（-1..1，右/上为正）：不移动真实鼠标也能验证转头幅度 */

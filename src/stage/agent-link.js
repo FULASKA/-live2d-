@@ -14,16 +14,20 @@ const EXPR_OF = {
   thinking: '屑屑眼',
   waiting: '＞＜',
   error: '流冷汗',
-  success: '爱心眼',
+}
+// 收工那一下要「举手指 + 兔嘴 + 戴眼镜」：多表情叠一层，比单个爱心眼更像在邀功
+const EXPRS_OF = {
+  success: ['兔牙', '黑框眼镜'],
 }
 
 const HIDE_AFTER_MS = { success: 4600, error: 6000, result: 2200 }
 
-export function createAgentLink({ bubble, layers, expressions = [], poses, life, onState } = {}) {
+export function createAgentLink({ bubble, layers, expressions = [], poses, life, mouth, onState } = {}) {
   let lastState = '__init__'
   let lastAt = 0
   let hideTimer = 0
   let enabled = true
+  let successMood = false
 
   const defOf = (name) => expressions.find((e) => e.name === name)
 
@@ -31,12 +35,13 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
     try { layers?.removeSource('agent') } catch {}
   }
 
-  function setExpression(name) {
+  function setExpressions(names) {
     clearExpression()
-    if (!name) return
-    const def = defOf(name)
-    if (!def) return
-    try { layers?.addExpression(name, def.params, { source: 'agent', fade: 0.24 }) } catch {}
+    for (const name of [].concat(names || [])) {
+      const def = defOf(name)
+      if (!def) continue
+      try { layers?.addExpression(name, def.params, { source: 'agent', fade: 0.24 }) } catch {}
+    }
   }
 
   function scheduleHide(ms) {
@@ -46,6 +51,7 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
       bubble?.hide()
       // 终态收起时顺手把表情也撤掉，回到待机
       clearExpression()
+      if (successMood) { try { mouth?.clearMood() } catch {}; successMood = false }
     }, ms)
   }
 
@@ -59,13 +65,22 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
 
     if (!state) {
       clearExpression()
+      if (successMood) { try { mouth?.clearMood() } catch {}; successMood = false }
       scheduleHide(1200)
       try { onState?.(null) } catch {}
       return
     }
 
     try { onState?.(state) } catch {}
-    setExpression(EXPR_OF[state] || null)
+    setExpressions(EXPRS_OF[state] ?? EXPR_OF[state] ?? null)
+    // 收工的「兔嘴」：兔牙表情要张嘴才看得见，配一个抿嘴笑
+    if (state === 'success') {
+      successMood = true
+      try { mouth?.setMood({ open: 0.32, smile: 0.3, form: -0.16 }, HIDE_AFTER_MS.success || 4600) } catch {}
+    } else if (successMood) {
+      try { mouth?.clearMood() } catch {}
+      successMood = false
+    }
     bubble?.say(state)
     // 状态一变，耳朵扑棱一下（小动作，不抢气泡）
     try { life?.flap(Math.random() < 0.5 ? 'L' : 'R', 0.8) } catch {}

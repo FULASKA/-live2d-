@@ -104,9 +104,38 @@ const ROUTINES = {
       ParamBodyAngleZ: [[0, 0], [0.35, 2.0], [1, 0]],
     },
   },
+  // 吹狗尾草：举起狗尾草 → 小 O 嘴 → 一阵风吹动头发/耳朵
+  吹狗尾草: {
+    ms: 5600,
+    lines: ['呼——', '草籽要飞走啦。', '轻轻的……'],
+    pose: '狗尾草',
+    gust: 2.2,
+    mouth: { open: 0.3, funnel: 0.85, pucker: 0.6, form: -0.2 },
+    tracks: {
+      ParamAngleX: [[0, 0], [0.25, 4], [0.6, 3], [1, 0]],
+      ParamAngleY: [[0, 0], [0.24, -5], [0.6, -4], [1, 0]],
+      ParamAngleZ: [[0, 0], [0.3, 2.6], [0.62, -1.6], [1, 0]],
+      ParamBodyAngleX: [[0, 0], [0.3, 2.2], [1, 0]],
+      ParamEyeLOpen: [[0, 0], [0.24, -0.22], [0.62, -0.28], [1, 0]],
+      ParamEyeROpen: [[0, 0], [0.24, -0.22], [0.62, -0.28], [1, 0]],
+    },
+  },
+  // 戴铁盆：钢盆表情 + 摇头晃脑（左摇右晃，带一点身体跟随）
+  戴铁盆: {
+    ms: 5400,
+    lines: ['铛——', '这样就不怕撞头啦。', '稳不稳？'],
+    exprs: ['钢盆'],
+    mouth: { smile: 0.22, open: 0.06 },
+    tracks: {
+      ParamAngleZ: [[0, 0], [0.12, -7], [0.28, 7], [0.44, -6], [0.6, 6], [0.76, -4], [0.9, 3], [1, 0]],
+      ParamAngleX: [[0, 0], [0.18, 4], [0.5, -4], [0.82, 3], [1, 0]],
+      ParamBodyAngleZ: [[0, 0], [0.14, -4], [0.34, 4], [0.56, -3.5], [0.76, 3], [1, 0]],
+      ParamBodyAngleX: [[0, 0], [0.3, 2.0], [1, 0]],
+    },
+  },
 }
 
-export function createIdleMotions({ bus, param, life, idleFaces, onLine, options = {} } = {}) {
+export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart, onFinish, options = {} } = {}) {
   const cfg = {
     enabled: true,
     speed: 1,           // 设置里的「待机频率」倍数：越大换动作越勤
@@ -134,7 +163,11 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, options
   /** 用户一互动就让位：互动期间不换新动作，正在播的也快速收尾 */
   function pause(ms = 1500) {
     pausedUntil = Math.max(pausedUntil, performance.now() + ms)
-    if (cur && cur.t > cur.ms * 0.5) cur = null
+    if (cur && cur.t > cur.ms * 0.5) {
+      const done = cur
+      cur = null
+      try { onFinish?.(done.name, done.r) } catch {}
+    }
   }
 
   /** 解除让位（外部控制用；不再等满 pause 窗口） */
@@ -148,6 +181,7 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, options
     const r = ROUTINES[pick]
     cur = { name: pick, r, t: 0, ms: r.ms }
     last = pick
+    try { onStart?.(pick, r) } catch {}
     plays += 1
     next = cfg.minGap + Math.random() * (cfg.maxGap - cfg.minGap)
     if (r.face) idleFaces?.trigger?.(r.face)
@@ -187,7 +221,11 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, options
         if (next <= 0) trigger()
       } else {
         cur.t += dt * 1000            // 秒 → 毫秒（cur.ms 是毫秒）
-        if (cur.t >= cur.ms) { cur = null } else {
+        if (cur.t >= cur.ms) {
+          const done = cur
+          cur = null
+          try { onFinish?.(done.name, done.r) } catch {}
+        } else {
           const p = cur.t / cur.ms
           // 首尾各留 fade：整体乘一个钟形包络
           const fadeIn = clamp(cur.t / (cfg.fade * 1000), 0, 1)
