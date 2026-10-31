@@ -10,14 +10,15 @@
 <main id="panel">
 
   <section>
-    <h3>窗口尺寸 A</h3>
-    <div class="row"><span id="size-readout" class="readout">— × —</span><button id="win-center">居中</button></div>
-    <div class="hint">拖覆盖层窗口的<b>边或角</b>直接改大小；A 变、角色按比例跟着缩放，模型大小 B 再单独调</div>
+    <h3>角色大小（窗口等比例跟随）</h3>
+    <div class="row"><input type="range" id="zoom" min="0.3" max="3" step="0.05"><span id="zoom-readout" class="readout"></span></div>
+    <div class="hint">窗口尺寸 = 角色大小 × 模型画布，角色永远居中；把鼠标放到<b>角色身上按 Ctrl + 滚轮</b>也能缩</div>
   </section>
 
   <section>
-    <h3>模型尺寸 B</h3>
-    <div class="row"><input type="range" id="zoom" min="0.4" max="2.5" step="0.05"><span id="zoom-readout" class="readout"></span></div>
+    <h3>窗口</h3>
+    <div class="row"><span id="size-readout" class="readout">— × —</span><button id="win-center">居中</button></div>
+    <div class="hint">窗口大小由角色大小推导（不再拖边框改）；<b>左键或中键拖角色</b>搬窗口</div>
   </section>
 
   <section>

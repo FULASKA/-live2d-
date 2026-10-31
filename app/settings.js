@@ -53,7 +53,7 @@ function paint() {
 
   const zoom = Number(settings.zoom) || 1
   setRange('#zoom', zoom)
-  $('#zoom-readout').textContent = zoom.toFixed(2)
+  $('#zoom-readout').textContent = `${Math.round(zoom * 100)}%`
   setRange('#strength', Number(settings.strength ?? 1))
   setRange('#pet-gain', Number(settings.petGain ?? 1.6))
 
@@ -136,7 +136,7 @@ async function loadMeta() {
 function wire() {
   $('#zoom').oninput = (e) => {
     const zoom = Number(e.target.value)
-    $('#zoom-readout').textContent = zoom.toFixed(2)
+    $('#zoom-readout').textContent = `${Math.round(zoom * 100)}%`
     pushSettingsSoon({ zoom })
   }
   $('#strength').oninput = (e) => pushSettingsSoon({ strength: Number(e.target.value) })

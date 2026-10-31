@@ -50,9 +50,7 @@ const shell = window.shell || {
   dragBegin: () => {},
   dragEnd: () => {},
   setPassThrough: () => {},
-  resizeBegin: () => {},
-  resizeMove: () => {},
-  resizeEnd: () => {},
+  fit: () => {},
   openSettings: () => {},
   onSettings: () => {},
   stageRpc: async () => ({ ok: false }),
@@ -114,6 +112,8 @@ async function main() {
     await applyStagePatch()
     await bootStage()
     bootRegions()
+    // 窗口尺寸跟角色绑定：模型尺寸拿到了，立刻把窗口收成刚好包住角色的样子
+    applyFit(true)
     // 对话气泡：漫画式挂在头顶右侧（设置里可切左侧），角色移动/换尺寸时跟着走
     state.bubble = createBubble({
       el: $('#bubble'),
@@ -134,7 +134,7 @@ async function main() {
     bindTools()
     bindWindowDrag()
     bindToolsDismiss()
-    bindResizeHandles()
+    bindWheelZoom()
     bindPassThrough()
     bootPerfOverlay()
     document.title = `stage · ${state.caps.model.name}`
@@ -1040,6 +1040,39 @@ function bindPassThrough() {
     pinchTest: (dx, dy) => { state.facePinch.grab(); state.facePinch.move(dx, dy) },
     pinchReset: () => state.facePinch.release(),
     mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
+    /** 视口状态（缩放/偏移/实际像素缩放）—— 排查「窗口跟着角色」时的落点 */
+    view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
+    /** 真实轮廓在窗口里的包围盒（客户端像素）+ 相对窗口中心的偏移 dx/dy */
+    maskBox: () => {
+      const m = state.mask || refreshMask(true)
+      if (!m?.data) return null
+      let minX = m.w, maxX = -1, minY = m.h, maxY = -1
+      for (let y = 0; y < m.h; y++) {
+        for (let x = 0; x < m.w; x++) {
+          if (m.data[y * m.w + x] > 8) {
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+          }
+        }
+      }
+      if (maxX < 0) return null
+      const W = window.innerWidth
+      const H = window.innerHeight
+      const box = {
+        left: +((minX / m.w) * W).toFixed(1),
+        top: +((minY / m.h) * H).toFixed(1),
+        right: +(((maxX + 1) / m.w) * W).toFixed(1),
+        bottom: +(((maxY + 1) / m.h) * H).toFixed(1),
+      }
+      box.w = +(box.right - box.left).toFixed(1)
+      box.h = +(box.bottom - box.top).toFixed(1)
+      box.dx = +((box.left + box.right) / 2 - W / 2).toFixed(1)
+      box.dy = +((box.top + box.bottom) / 2 - H / 2).toFixed(1)
+      box.margin = { left: +box.left.toFixed(0), top: +box.top.toFixed(0), right: +(W - box.right).toFixed(0), bottom: +(H - box.bottom).toFixed(0) }
+      return box
+    },
     state: () => ({ ignoring: state.ignoring, clickThrough: state.settings?.clickThrough, pointerDown: state.pointerDown }),
   }
 }
@@ -1077,34 +1110,98 @@ function hidePassHint() {
   if (el) el.style.display = 'none'
 }
 
-// ---------- 窗口轮廓拖拽改大小 ----------
-function bindResizeHandles() {
-  document.querySelectorAll('.rz').forEach((el) => {
-    const edge = el.dataset.edge
-    let last = null
-    el.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return
-      e.preventDefault()
-      e.stopPropagation()
-      last = { x: e.screenX, y: e.screenY }
-      try { el.setPointerCapture(e.pointerId) } catch {}
-      shell.resizeBegin(edge)
-    })
-    el.addEventListener('pointermove', (e) => {
-      if (!last) return
-      shell.resizeMove(e.screenX - last.x, e.screenY - last.y)
-    })
-    const end = (e) => {
-      if (!last) return
-      last = null
-      shell.resizeEnd()
-      try { el.releasePointerCapture(e.pointerId) } catch {}
-      refreshMask(true)
+// ---------- 窗口跟随角色（尺寸 = 模型画布 × 角色大小）----------
+// 视口固定 contain、zoom 恒为 1：窗口多大，角色就多大 —— 「角色大小与窗口大小比例绑定」
+// 在数值上的含义是窗口尺寸由模型画布推导，而不是反过来测角色包围盒（后者会形成正反馈）。
+const FIT_BASE_W = 540      // zoom = 1 时角色的屏幕宽度（窗口再留出气泡余量）
+const FIT_PAD_X = 0.12      // 左右各 6%：够气泡挂在头侧，又不会把角色缩太小
+const FIT_PAD_Y = 0.10      // 上下各 5%：头顶与裙摆底不会被切
+const FIT_MIN = 0.25
+const FIT_MAX = 4
+
+function fitSize() {
+  const ms = state.stage?.modelSize?.()
+  if (!ms?.width || !ms?.height) return null
+  const k = (FIT_BASE_W / ms.width) * (Number(state.settings?.zoom) || 1)
+  return {
+    w: Math.round(ms.width * k * (1 + FIT_PAD_X)),
+    h: Math.round(ms.height * k * (1 + FIT_PAD_Y)),
+  }
+}
+
+let fitTimer = 0
+const BODY_BANDS = ['头', '胸', '腰', '裙摆', '腿', '脚']
+
+/**
+ * 身体中心（模型坐标）：只取静态的躯干/四肢热区包围盒，**不含尾巴和手**——
+ * 尾巴和头发一直在摆，用真实轮廓去量会把角色越推越偏，而且每次浮动都不一样。
+ */
+function bodyAnchor() {
+  const rs = (state.store?.all || []).filter((r) => BODY_BANDS.includes(r.name) && r.points?.length)
+  if (!rs.length) return null
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  for (const r of rs) {
+    for (const [x, y] of r.points) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
     }
-    el.addEventListener('pointerup', end)
-    el.addEventListener('pointercancel', end)
-  })
-  window.addEventListener('resize', () => refreshMask(true))
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY }
+}
+
+/**
+ * 居中的归一化偏移——**纯几何算，不做任何运行时测量**。
+ *
+ * 视口是 contain：scale = min(W/mw, H/mh) × 0.95。窗口的长宽比被 FIT_PAD 固定，
+ * 所以永远是「高度受限」那一支，scale/H = 0.95/mh，于是：
+ *   offsetY = -2 × (身体中心y/mh − 0.5) × 0.95
+ *   offsetX = -2 × (身体中心x/mw − 0.5) × 0.95 × (1+FIT_PAD_Y)/(1+FIT_PAD_X)
+ * 全是模型常量，和窗口大小、缩放、测量时机都无关 —— 不会出现「切一次尺寸就偏一次」。
+ */
+function centerOffsets() {
+  const b = bodyAnchor()
+  const ms = state.stage?.modelSize?.()
+  if (!b || !ms?.width || !ms?.height) return { x: 0, y: 0 }
+  const fx = b.x / ms.width - 0.5
+  const fy = b.y / ms.height - 0.5
+  const k = 2 * 0.95 // 2 × 视口 margin
+  const clamp = (n) => Math.max(-0.4, Math.min(0.4, n))
+  return {
+    x: clamp((-k * fx * (1 + FIT_PAD_Y)) / (1 + FIT_PAD_X)),
+    y: clamp(-k * fy),
+  }
+}
+
+/** 重算并下发窗口尺寸（连发合并 70ms，滚轮狂滚也不会打爆往主进程的 IPC） */
+function applyFit(now = false) {
+  const size = fitSize()
+  if (!size) return
+  const send = () => {
+    fitTimer = 0
+    const o = centerOffsets()
+    state.viewport?.set({ zoom: 1, offsetX: o.x, offsetY: o.y })
+    shell.fit?.(size.w, size.h)
+    state.bubble?.reposition()
+  }
+  clearTimeout(fitTimer)
+  if (now) { send(); return }
+  fitTimer = setTimeout(send, 70)
+}
+
+/** Ctrl + 滚轮（只在角色身上生效）：角色大小与窗口大小一起变 */
+function bindWheelZoom() {
+  window.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return
+    if (!bodyAt(e.clientX, e.clientY)) return
+    e.preventDefault()
+    const cur = Number(state.settings?.zoom) || 1
+    const next = Math.min(FIT_MAX, Math.max(FIT_MIN, cur * (e.deltaY < 0 ? 1.06 : 1 / 1.06)))
+    if (Math.abs(next - cur) < 1e-4) return
+    shell.set({ zoom: next }) // 主进程存盘并广播 → applySettings → applyFit
+    toast(`角色大小 ${Math.round(next * 100)}%`, 900)
+  }, { passive: false })
 }
 
 function bindWindowDrag() {
@@ -1115,40 +1212,23 @@ function bindWindowDrag() {
 }
 
 /**
- * 中键拖动 = 把角色在窗口里挪（改模型偏移，松手写进 settings）。
- * 搬窗口交给左键拖角色（主进程按全局光标锚点搬，不累积漂移）。
- * 注意：中键移动**不喂物理**（不产生惯性冲击），纯位移。
+ * 中键拖动 = 搬窗口（和左键拖角色同一套：主进程按全局光标锚点搬，不累积漂移）。
+ * 中键移动**不喂物理**（不产生惯性冲击），纯位移。
  */
 function bindMiddleDrag(stage) {
-  let st = null
   stage.addEventListener('pointerdown', (e) => {
     if (e.button !== 1) return
     e.preventDefault()
     hideTools()
-    const v = state.viewport.view
-    st = { x: e.screenX, y: e.screenY, o: { offsetX: v.offsetX, offsetY: v.offsetY } }
     state.middleDragging = true
+    shell.dragBegin()
     try { stage.setPointerCapture(e.pointerId) } catch {}
   })
-  stage.addEventListener('pointermove', (e) => {
-    if (!st) return
-    const dx = e.screenX - st.x
-    const dy = e.screenY - st.y
-    const w = Math.max(1, window.innerWidth)
-    const h = Math.max(1, window.innerHeight)
-    const clampOff = (v) => Math.max(-0.9, Math.min(0.9, v))
-    state.viewport.set({
-      offsetX: clampOff(st.o.offsetX + (2 * dx) / w),
-      offsetY: clampOff(st.o.offsetY + (2 * dy) / h),
-    })
-  })
   const end = (e) => {
-    if (!st) return
-    st = null
+    if (!state.middleDragging) return
     state.middleDragging = false
     try { stage.releasePointerCapture(e.pointerId) } catch {}
-    const v = state.viewport.view
-    shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
+    shell.dragEnd()
     refreshMask(true)
   }
   stage.addEventListener('pointerup', end)
@@ -1284,13 +1364,7 @@ function applySettings(next) {
   state.settings = { ...state.settings, ...next }
 
   const zoom = Number(state.settings.zoom)
-  if (Number.isFinite(zoom) && state.viewport) {
-    if (Math.abs(state.viewport.view.zoom - zoom) > 1e-4) {
-      state.viewport.set({ zoom })
-      state.bubble?.reposition()
-      refreshMask(true)
-    }
-  }
+  if (Number.isFinite(zoom)) applyFit() // zoom = 角色大小：窗口尺寸跟着它重算
 
   const strength = Number(state.settings.strength ?? 1)
   state.gaze?.set({ enabled: state.settings.gaze !== false, strength })

@@ -17,9 +17,8 @@ contextBridge.exposeInMainWorld('shell', {
   dragBegin: () => ipcRenderer.send('win:drag-begin'),
   dragEnd: () => ipcRenderer.send('win:drag-end'),
   moveBy: (dx, dy) => ipcRenderer.send('win:move', { dx, dy }),
-  resizeBegin: (edge) => ipcRenderer.send('win:resize-begin', edge),
-  resizeMove: (dx, dy) => ipcRenderer.send('win:resize-move', { dx, dy }),
-  resizeEnd: () => ipcRenderer.send('win:resize-end'),
+  // 窗口尺寸跟随角色：渲染层算尺寸，主进程保持中心不变地改
+  fit: (w, h) => ipcRenderer.send('win:fit', { w, h }),
   center: () => ipcRenderer.send('win:center'),
   setPassThrough: (v) => ipcRenderer.send('win:pass-through', v),
   onClickThrough: (fn) => ipcRenderer.on('shell:click-through', (_e, v) => fn(v)),

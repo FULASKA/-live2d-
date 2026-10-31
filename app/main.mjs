@@ -135,38 +135,31 @@ function startAgentStatusFeed(target) {
   tick()
 }
 
-// 拖窗口轮廓改大小：无边框窗口没法靠系统边框，渲染层的八个把手发增量，这里按边缘锚点算 bounds
-let resizeBase = null
-function wireResize() {
-  ipcMain.on('win:resize-begin', (_e, edge) => {
-    if (!win) return
-    const [x, y] = win.getPosition()
-    const [w, h] = win.getSize()
-    resizeBase = { edge: String(edge || 'se'), x, y, w, h }
-  })
-  ipcMain.on('win:resize-move', (_e, { dx = 0, dy = 0 } = {}) => {
-    if (!win || !resizeBase) return
-    const MIN_W = 220
-    const MIN_H = 220
-    const b = resizeBase
-    let { x, y, w, h } = b
-    if (b.edge.includes('e')) w = Math.max(MIN_W, Math.round(b.w + dx))
-    if (b.edge.includes('s')) h = Math.max(MIN_H, Math.round(b.h + dy))
-    if (b.edge.includes('w')) { w = Math.max(MIN_W, Math.round(b.w - dx)); x = b.x + (b.w - w) }
-    if (b.edge.includes('n')) { h = Math.max(MIN_H, Math.round(b.h - dy)); y = b.y + (b.h - h) }
-    win.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h })
-    settings.width = w
-    settings.height = h
-  })
-  ipcMain.on('win:resize-end', () => {
-    resizeBase = null
-    if (win) {
-      const [w, h] = win.getContentSize()
-      settings.width = w
-      settings.height = h
+// 窗口尺寸跟随角色：尺寸由渲染层按「模型画布 × 角色大小」算好，这里只负责
+// **保持中心不变**地改大小（角色在窗口里是居中 contain，所以改完依然居中）；
+// 贴近屏幕边缘时按工作区夹一下，不会把窗口推出屏幕。
+function wireFit() {
+  ipcMain.on('win:fit', (_e, size = {}) => {
+    if (!win || win.isDestroyed()) return
+    const W = Math.max(180, Math.round(Number(size.w) || 0))
+    const H = Math.max(220, Math.round(Number(size.h) || 0))
+    const b = win.getBounds()
+    const cx = Math.round(b.x + b.width / 2)
+    const cy = Math.round(b.y + b.height / 2)
+    const { workArea } = screen.getDisplayNearestPoint({ x: cx, y: cy })
+    const x = Math.min(Math.max(Math.round(cx - W / 2), workArea.x), workArea.x + workArea.width - W)
+    const y = Math.min(Math.max(Math.round(cy - H / 2), workArea.y), workArea.y + workArea.height - H)
+    if (b.width !== W || b.height !== H || b.x !== x || b.y !== y) {
+      win.setBounds({ x, y, width: W, height: H })
+      // 只有尺寸真的变了才落盘 + 广播：否则「广播 → 渲染层重新 fit → 又广播」会打成死循环，
+      // 每次循环都会把渲染层按轮廓做的居中修正冲掉。
+      settings.width = W
+      settings.height = H
+      settings.x = x
+      settings.y = y
+      saveSettings()
+      broadcastSettings()
     }
-    saveSettings()
-    broadcastSettings()
   })
 }
 
@@ -341,7 +334,7 @@ app.whenReady().then(async () => {
   srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)
   wireIpc()
-  wireResize()
+  wireFit()
   wireWindowDrag()
   startCursorFeed()
   await createWindow()
