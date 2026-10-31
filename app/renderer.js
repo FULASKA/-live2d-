@@ -533,8 +533,11 @@ async function bootStage() {
       const targetX = Math.max(-10, Math.min(10, -motionState.vx * 0.02))
       const targetY = Math.max(-7, Math.min(7, -motionState.vy * 0.014))
       // 弹簧-阻尼：stiffness 越大跟得越紧，damping 越大越快停
-      dragShape.vrx += ((targetX - dragShape.rx) * 90 - dragShape.vrx * 12) * dt
-      dragShape.vry += ((targetY - dragShape.ry) * 90 - dragShape.vry * 12) * dt
+      // 拖的时候跟得紧（高阻尼），松手后低阻尼自由回弹：余震约 0.5–0.7 秒才收住
+      const stiff = 45
+      const damp = state.windowDragging ? 18 : 5.5
+      dragShape.vrx += ((targetX - dragShape.rx) * stiff - dragShape.vrx * damp) * dt
+      dragShape.vry += ((targetY - dragShape.ry) * stiff - dragShape.vry * damp) * dt
       dragShape.rx += dragShape.vrx * dt
       dragShape.ry += dragShape.vry * dt
       state.poseBus?.add('ParamBodyAngleRX', dragShape.rx)
@@ -883,7 +886,9 @@ function bootRegions() {
       return sp.x >= -m && sp.y >= -m && sp.x <= s.width + m && sp.y <= s.height + m
     },
     onEvent: (ev) => {
-      const name = ev.region?.name
+      const rawName = ev.region?.name
+      // 额头热区只管「点击切三态」；抚摸/拖动仍按头部处理，否则滑动摸头会被额头吃掉
+      const name = rawName === '额头' && ev.type !== 'tap' ? '头' : rawName
       // 上行反馈：真正发生的互动（点 / 摸第一步 / 拖）才报，避免移动刷屏
       if (ev.type === 'tap' || (ev.type === 'pet' && ev.step === 1) || ev.type === 'dragStart' || ev.type === 'dragEnd') {
         const p = ev.point || {}
@@ -1412,17 +1417,20 @@ function regionScreenBox(name) {
   }
 }
 
-/** 头部右键：前倾做成**开关**（点一次开、再点一次关），不再几秒后自己消失 */let leanOn = false
+/**
+ * 头部右键：前倾做成**开关**（点一次开、再点一次关）。
+ * 以**图层实际状态**为准（不存本地布尔）——否则设置里切过、或者被 exprClear 清掉之后，
+ * 开关会显示「关」而模型其实还开着（反过来也有）。
+ */
 function toggleLean() {
   const def = (state.caps.expressions || []).find((x) => x.name === '前倾')
   if (!def) { toast('模型没有「前倾」表情'); return }
-  if (leanOn) {
-    state.layers.removeSource('lean')
-    leanOn = false
+  const on = !!state.layers?.hasExpression?.('前倾')
+  if (on) {
+    state.layers.removeExpression('前倾')
     toast('前倾：关')
   } else {
     state.layers.addExpression('前倾', def.params, { source: 'lean' })
-    leanOn = true
     toast('前倾：开')
   }
 }
@@ -1925,6 +1933,7 @@ function installProbes({ motionState } = {}) {
     /** 视口状态（缩放/偏移/实际像素缩放）—— 排查「窗口跟着角色」时的落点 */
     view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
     dragState: () => ({ dragging: !!state.windowDragging, vec: state.dragVec || null }),
+    leanToggle: () => { toggleLean(); return !!state.layers?.hasExpression?.('前倾') },
     /** 跟随层的内部状态（平滑后的眼/头/身），排查「头不转」时看它到底是没算还是有被覆盖 */
     gazeState: () => state.gaze?.state?.() ?? null,
     gazeOpts: () => (state.gaze?.options ? { ...state.gaze.options } : null),

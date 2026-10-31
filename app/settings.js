@@ -70,6 +70,7 @@ function paint() {
   setCheck('#drag-physics', settings.dragPhysics !== false)
   setCheck('#top', !!settings.alwaysOnTop)
   setCheck('#click-through', !!settings.clickThrough)
+  setCheck('#auto-start', !!settings.autoStart)
 }
 
 function setRange(sel, v) {
@@ -134,6 +135,7 @@ function wire() {
   $('#drag-physics').onchange = (e) => pushSettings({ dragPhysics: !!e.target.checked })
   $('#top').onchange = (e) => pushSettings({ alwaysOnTop: !!e.target.checked })
   $('#click-through').onchange = (e) => pushSettings({ clickThrough: !!e.target.checked })
+  $('#auto-start').onchange = (e) => pushSettings({ autoStart: !!e.target.checked })
 
   $('#open-editor').onclick = () => shell.openEditor?.()
   $('#patch-export').onclick = async () => {

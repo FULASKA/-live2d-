@@ -35,6 +35,7 @@ const DEFAULTS = {
   padY: 0.02,            // 上下留白（0–0.2，占画布高度比例）；越小边框越贴角色
   bodyShape: 0,          // 体型：0 默认 / 0.4 体型1 / 1 体型2（Clothes2 参数，设置里拉条调）
   dragPhysics: true,     // 拖拽物理：拖动窗口时让模型自己的物理跟着甩（类似 VTS 的拖拽物理演算）
+  autoStart: false,      // 开机自启（Windows 登录时启动舞台）
   model: process.env.STAGE_MODEL || DEFAULT_MODEL,
 }
 
@@ -60,6 +61,14 @@ async function saveSettings() {
 
 // 渲染层按角色轮廓实时开关的穿透（区别于手动全窗穿透 settings.clickThrough）
 let dynamicIgnore = false
+
+/** 开机自启：写 Windows 登录启动项。开发模式跳过，免得把 electron.exe 写进系统 */
+function applyAutoStart() {
+  try {
+    if (!app.isPackaged) return
+    app.setLoginItemSettings({ openAtLogin: !!settings.autoStart, path: process.execPath, args: [] })
+  } catch (e) { console.error('[autostart]', e && e.message) }
+}
 
 function applyWindowSettings() {
   if (!win) return
