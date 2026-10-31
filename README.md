@@ -1,203 +1,88 @@
-# live2d-stage
+# 大肥鱼 Live2D 桌宠
 
-协作工作台的角色演出层。**只负责角色**：透明窗口、双路动作控制、分区互动、自制关键帧动画。
-DSH 只拉起它并转发状态，界面本体不嵌在 DSH 页面里。
+Windows 桌面上的 Live2D 角色：透明无边框窗口、跟随鼠标视线、点击 / 抚摸 / 捏脸互动、待机小动作，
+并且可以接入 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）——让 AI 一边干活一边用气泡和动作「说话」。
 
-> 当前状态：**v0.1.0-dev**。Electron 壳、双向控制总线（动作下发 + 互动反馈）已可用；
-> 还没做 DSH 侧的正式插件（目前用 CLI 与状态文件联动）。
+![Electron](https://img.shields.io/badge/Electron-33-47848f) ![Live2D](https://img.shields.io/badge/Live2D-Cubism%205-ff6b9d) ![License](https://img.shields.io/badge/code-MIT-blue)
 
-## 渲染内核
+## ⚠️ 模型不随本仓库 / 安装包分发
 
-`pixi.js 8` + [`untitled-pixi-live2d-engine`](https://github.com/Untitled-Story/untitled-pixi-live2d-engine)（MIT，官方 Cubism 5 框架封装）。
+**本项目的所有下载包都不含「大肥鱼」模型。** 模型版权归原作者，作者明确禁止二次发布，所以：
 
-> 换核记录：原先用 `pixi-live2d-display@0.4`（Cubism 4 管线），它不认**逐网格乘法色**，
-> 而本模型的鼻子阴影正是用乘法色做的 → 鼻子被画成实心黑块、瞳孔丢色变灰白圈。
-> 换核后画面正确，无需隐藏任何部件。细节与实测更新顺序见 `docs/SPEC.md` §2.1。
+- 请自行向原作者获取模型（`大肥鱼.model3.json` 及其 `moc3` / 贴图 / 动作 / 物理文件，通常是一个文件夹）；
+- 拿到后把它「挂载」给桌宠即可（见下一节），程序按模型名字记忆路径；
+- 也支持任意 Cubism 5 导出的 `.model3.json`，只是互动热区是按大肥鱼模型调校的，别的模型需要自己调。
 
-内核只经 `src/stage/engine.js` 访问；上层只拿原语。想换回官方 SDK 直写渲染循环，只重写这一个文件。
+> 换模型：右键角色 → 设置 →「模型」→「更换 Live2D 模型」。
 
-## 已经验证过的
+## 下载与安装
 
-在真机 GPU 与无头 Edge 两条路径上验证（`npm run shot` 可复现）：
+1. 到 [Releases](../../releases) 下载 `大肥鱼Live2d桌宠-v1.0.0-win32-x64.zip`；
+2. 解压到一个固定目录（路径含中文没问题）；
+3. 双击 `大肥鱼Live2d桌宠.exe`；
+4. 第一次启动弹窗选模型 → 选你自己的 `大肥鱼.model3.json`，之后启动即记住。
 
-| 能力 | 状态 | 证据 |
-|---|---|---|
-| 加载真实模型 | ✅ | 大肥鱼 5 张贴图（含 8192²）/ 16MB moc3 v5 正常渲染 |
-| 乘法色 / 瞳孔 | ✅ | 鼻子有阴影不结块、瞳孔保留蓝色（旧内核的病灶已消失） |
-| 能力枚举 | ✅ | 509 参数、148 部件、8 动作、23 表情 |
-| 运行时参数内省 | ✅ | 取到每个参数的 min/max/default（静态文件给不出） |
-| 动作下发 | ✅ | 动作组 `Idle`/`Action` 注册成功 |
-| 表情叠加（自持 L2 层） | ✅ | `圈圈眼` 换眼型；`流泪+脸红` 同时成立（脸颊均色 159/148/176 vs 基线 157/154/182） |
-| 视线 + 头 + 身体跟随（L1） | ✅ | 鼠标在上 `eyeY=+0.67`、在下 `-0.71`；`ParamAngleX/Y/Z`、`ParamBodyAngleX/Y/Z` 同向联动 |
-| 自动眨眼 / 呼吸 | ✅ | 待机 2.4–5.6 秒自己眨（可拍到闭眼帧）；呼吸钉两端 `ChestY1` -0.28 → +0.06，胸口有起伏 |
-| 道具待机动作 | ✅ | 吹狗尾草（举草 + 小 O 嘴 + 一阵风）、戴铁盆（钢盆 + 摇头晃脑） |
-| 收工三连 | ✅ | `success` = 竖手指 + 兔牙 + 黑框眼镜 + 抿嘴 |
-| 分区互动 | ✅ | 自动铺 7 个热区（头/胸/腰/裙摆/腿/脚 + 尾巴）；点击/抚摸/拖动分别触发；手绘区域 + 档案保存 |
-| 动作组切换 | ✅ | 连点「头→腰」只留 `＞＜`（前一组的 `爱心眼` 被整组撤掉）；同组再点 = 收回（两次 → 0 层） |
-| 物理输入表情 | ✅ | `LeanInput` 写在 `physics.evaluate` 之前：前倾时 `bodyY` 由 0.7 → -23.1，肩/裙摆一起前压 |
-| 尾巴差集 | ✅ | 尾巴凸包与身体五段求差，交集挖成洞（`holes`），命中与绘制都不与其它热区重叠 |
-| 透明处穿透 | ✅ | 热区覆盖但像素 `alpha=0` → 判为未命中（点背景不触发反馈） |
-| 透明背景 | ✅ | 画布 `backgroundAlpha:0`，透明格可透出 |
-| 双路指令 | ✅ | `POST /api/action` 下发后页面真实执行（say/表达式/姿势/视线/待机/状态） |
-| 互动反馈 | ✅ | 点头 → `feedback.jsonl` 记录 `{region:"头",gesture:"click",point:{…}}` |
-| 状态快照 | ✅ | `GET /api/state` 查到气泡文字、当前待机动作、表情层、视线归属 |
-| 权限 | ✅ | 写接口无 token → 401 |
+无需安装运行时，解压即用；系统要求 Windows 10 / 11 x64。
 
-## 跑起来
+### 挂载模型的两个脚本化办法
+
+不想点弹窗（自动化 / 便携部署）时，用包内自带的 `挂载模型.cmd`：
+
+```
+把 大肥鱼.model3.json 拖到 挂载模型.cmd 上
+```
+
+它会校验 moc3、贴图、动作文件是否齐全，并把路径写进设置文件。等价的命令行：
+
+```
+大肥鱼Live2d桌宠.exe --model "D:\模型\大肥鱼.model3.json"
+```
+
+环境变量：`STAGE_MODEL=<模型路径>`（优先级低于 `--model`）、`STAGE_HOME=<目录>`（配置改放指定目录，便携用法）。
+
+## 玩法
+
+- **左键拖角色**：搬窗口（拖动时有拖拽物理，头发 / 裙子会甩）
+- **右键角色 / 空白处**：工具条（设置 / 退出）
+- **点头部**：摸头；**点额头**：常态 / 爱心眼 / 眼镜 三态循环
+- **按住脸拖动**：捏脸（跟随鼠标力度，耳朵扑棱 + 身体小抖）
+- **摸脚 / 摸腰**：痒痒的（胸腔骨盆快抖 + 两侧小臂反相摆 + 两只耳朵连扑）
+- **摸胸 / 摸胯**：举手 + 护住，胯部另有眯眼黑脸神态
+- **点手**：竖食指 / 放下
+- 待机时自己眨眼、呼吸、每 8–18 秒随机来一段小动作（换脚 / 东张西望 / 伸懒腰 / 挥挥手 / 戴铁盆…），
+  一有互动就停掉当前动作并复位
+- 设置里可调：角色大小、上下留白、跟随强度、转头幅度、待机频率、
+  全部表情与官方姿势（默认手 / 竖手指 / 举手 / 狗尾草）、体型拉条、拖拽物理、开机自启、气泡开关…
+- 快捷键：`Ctrl+Alt+L` 鼠标穿透，`Ctrl+Alt+Q` 退出
+
+## 接入 DSH（可选）
+
+`dsh-live2d-bridge` 是配套的 DSH 插件：桌宠启动后把「端口 + token」写到 `~/.dsh/live2d/endpoint.json`，插件据此：
+
+1. 把会话状态投到角色上（思考中 / 干活中 / 等你确认 / 成功 / 出错）；
+2. 给 agent 注册 `live2d`、`live2d_status` 两个工具，让 AI 主动说话、换表情、做动作；
+3. 新会话开始自动报到：「连接成功啦～」+ 竖食指。
+
+插件包见 Releases 里的 `dsh-live2d-bridge.zip`；源码在 [dsh-live2d-bridge](../../)（同账号仓库）。装法见包内说明。
+
+## 从源码跑 / 打包
 
 ```bash
-npm install                      # pixi8 + 引擎 + puppeteer-core
-node scripts/fetch-core.mjs      # 取 Cubism Core 到 vendor/（专有许可，不入库）
-node scripts/serve.mjs --model "C:/路径/xxx.model3.json"
-# 打开 http://127.0.0.1:53180/harness/
+npm install
+node scripts/fetch-core.mjs          # 取 Cubism Core 到 vendor/（专有许可，不入库）
+npm run app                          # 开发：Electron 窗口
+node scripts/serve.mjs --model "C:/路径/xxx.model3.json"   # 或只开浏览器验证台
+npm run pack                         # 打便携版到 release/
 ```
 
-无头验证（真实时间等待 + 截图 + 参数取样，用于回归）：
+无头回归（真实时间等待 + 截图 + 参数取样）：`node scripts/shot.mjs --url ... --out tmp/x.png`。
+设计决议与接口契约见 [`docs/SPEC.md`](docs/SPEC.md)、[`docs/PROTOCOL.md`](docs/PROTOCOL.md)。
 
-```bash
-node scripts/shot.mjs --url "http://127.0.0.1:53180/harness/?expr=脸红" --out tmp/x.png
-node scripts/shot.mjs --url "...?expr=圈圈眼" --mouse 120,120     # 顺便测视线
-```
+## 许可与署名
 
-验证钩子（可复现，也能进 CI）：
-
-```
-/harness/?expr=圈圈眼,流泪&steps=90   # 确定性推进 90 帧并叠加表情
-/harness/?motion=2                    # 播第 2 个 Action
-/harness/?param=ParamAngleX:20        # 钉住某参数（L5）
-/harness/?hidepart=Part10,Part46      # 覆盖部件不透明度
-/harness/?tap=331,150                 # 模拟点按（stage 坐标），验证热区反馈
-/harness/?reaction=头:tap;腰:tap      # 连点两个热区，验证「切换不叠加」
-/harness/?regionhit=331,150           # 只报告命中哪个热区 + alpha
-/harness/?regions=0                   # 关掉热区叠层
-/harness/?invertY=1                   # 轴向校正（极少数模型绑反时用）
-/harness/?zoom=1.4&offset=0,0.1       # 视口缩放/位移
-/harness/?checker=0&bg=%23ffffff      # 换背景
-```
-
-手势回归（真实指针事件，页面坐标）：
-
-```bash
-node scripts/shot.mjs --url "…/harness/" --drag "611,140,633,152"   # 摸头 → 爱心眼
-node scripts/shot.mjs --url "…/harness/" --drag "610,300,710,330"   # 拖动 → 只报手势
-node scripts/shot.mjs --url "…/harness/" --click "1188,124|300,250|340,255|345,300" --key Enter  # 画一个区域
-```
-
-## 应用壳（Electron）
-
-透明无边框窗口，角色浮在桌面上；**窗口尺寸 A 与模型尺寸 B 分开调**（A 改窗口、B 只改模型缩放）。
-
-```bash
-npm run app      # 启动应用窗口（内置同一个静态服务，端口随机）
-npm run pack     # 打便携版：dist/Live2DStage-win32-x64/Live2DStage.exe（约 450MB）
-```
-
-- **透明处自动穿透**：鼠标在角色轮廓外时点击会穿到后面的窗口，空白处不会再拖走整块看不见的窗口；
-  搬窗口：左键或**中键**按住角色拖（主进程按全局光标锚点搬，中键不产生惯性冲击）
-- **窗口跟着角色走**：窗口尺寸 = 模型画布 × 角色大小，角色永远在窗口正中，四周留白均匀；
-  设置里打开「显示窗口边框」后拖四边/四角缩放，窗口、角色、气泡按同一比例联动；
-  「上下留白」滑杆控制窗框上下空多少（默认 2%，越小越贴角色）
-  （原来 Ctrl+滚轮 的缩放已移除：指针滑到桌面时会把滚轮传给桌面，改掉图标大小）
-- **设置是独立窗口**：覆盖层只放角色，右键工具条的「设置」开一个普通窗口（可拖动、有标题栏、不参与穿透）。
-  覆盖层的尺寸从此与界面无关——它不用为了塞面板临时变宽，关掉设置也不会残留
-- **桌面级跟随**：主进程轮询全局光标，鼠标在窗口外、桌面任何位置角色都会看过去
-- **待机动作**：不互动时自己在动 —— 常驻的重心微摆，加上每 8–18 秒随机来一段
-  （重心换脚 / 东张西望 / 伸懒腰 / 打瞌睡 / 抖尾巴 / 理头发 / 吹狗尾草 / 戴铁盆 / 挥挥手 / 凑近摇摆），
-  部分动作配一句小台词；吹狗尾草会举草、小 O 嘴、放一阵风，戴铁盆会戴钢盆摇头，
-  挥挥手是竖起左食指、整条左臂左右摆（`Param44` 主摆，大臂/小臂/手腕慢半拍跟随），眉毛上下挑；
-  凑近摇摆会前倾、右手绕到背后、身体先沉再顶一下；
-  一按下去（摸头、捏脸、拖拽）就**停掉当前动作并复位**（撤表情/姿势/固定参数），不会和互动反应叠成怪脸。设置窗口「待机动作」可开关和调频率
-- **有生命感**：待机自己眨眼（2.4–5.6 秒一次，偶尔连眨），呼吸带动胸口/前发/裙摆起伏；
-  气泡冒出来时嘴会跟着念（按字数估时长，带音节与换气停顿）
-  完成一轮任务时举手指 + 兔牙 + 戴黑框眼镜（success 状态，4.6 秒后收起）
-- **转头幅度可调**：设置窗口「跟随 → 转头幅度」滑杆（0.5–2.0，默认 1.25）。
-  调的是中段灵敏度（指针在角色附近也开始明显转头），满偏固定夹在参数上限 30°
-- **额头三态**：点额头在 常态 / 爱心眼 / 黑框眼镜 之间循环（互斥：切到哪一档都会把另外两档清掉）；
-  设置窗口「模型表情 / 动作」里列出原包全部表情（体型另做拉条）与姿势，
-  官方动作（默认手 / 竖手指 / 举手 / 狗尾草）和我们的预设（护胯）分开两组，点一下应用、再点取消
-- **体型拉条**：原包的「默认体型 / 体型1 / 体型2」三个表达式改成连续滑杆（`Clothes2`：0 = 默认，0.4 ≈ 体型1，1 = 体型2）
-- **拖拽物理演算**：拖动窗口时把速度转成身体位移（`ParamBodyAngleRX/RY`，弹簧跟随 + 余震），
-  喂给 physics3，模型自带的头发/衣服/耳朵整条甩起来；设置里可关
-- **分区反应**：点击/抚摸的默认反应仍在，设置窗口不再提供编辑（实际用处不大，已移除）
-- **痒痒的**（摸脚 / 摸腰）：胸腔与骨盆小幅度快抖 + 两侧小臂反相摆 + 两只耳朵连扑，
-  配「别挠啦～ / 好痒呀…」这类躲痒台词，表情是 ＞＜ + 脸红
-- **摸胸 / 摸胯**：切「举手」姿势，右手盖在胸口；胯额外有护住 + 黑脸 + 脸红，
-  眼睛只睁一半、眯眼、眉毛压成「\ /」的神态
-  （模型没有瞳孔缩放参数，只有 `PupilX/PupilY` 透视位移，缩瞳只能靠眼睑近似）
-- **抚摸晃动增益**：滑动时头持续摆动（跟手，停手才淡出），叠一层朝手指方向的偏摆，
-  并且**朝手的方向转头**（`ParamAngleX`，身体跟着偏）——摸头时鼠标就在脑袋上，
-  光靠视线跟随会「转头量≈0」，这一档才是「在蹭手」的观感。设置窗口里有滑杆调幅度
-- **捏脸**：按住「脸」热区拖动 → 表情 `＞＜` + `脸红`，同时写
-  `CheeckPuff / CheeckPuffL / CheeckPuffR / CheeckPuff2 / CheeksWiggleX / CheeksWiggleXR`；
-  捏着的时候两只耳朵快速扑棱、身体（连带尾巴）快速小摆，头朝手转，松手平滑回零。
-  热区只取**眼睛以下**的脸颊（眼睛往上归头部热区）
-- 按在角色分区上 = 互动，不会误拖窗口
-- `Ctrl+Alt+L` 切换穿透（穿透时角色不可点，舞台里的「恢复鼠标」浮标仍可点）；`Ctrl+Alt+Q` 退出
-- 设置保存在 `%APPDATA%/live2d-stage/settings.json`（角色大小/跟随/增益/气泡/置顶），重启保留
-- **agent 双向控制**：舞台启动后把「端口 + token」写到 `~/.dsh/live2d/endpoint.json`，
-  任何本机进程都能用 HTTP 控制她说话、换表情、切姿势、指视线、演待机动作；
-  反过来，点/摸/拖与「动作已执行」会追加到 `~/.dsh/live2d/feedback.jsonl`，agent 读文件即可接手。
-  自带命令行：`node tools/stage-cli.mjs say 我回来啦 --ms 3000`（详见 `docs/PROTOCOL.md`）
-- **agent 干活时占住气泡**：thinking / working / waiting 期间气泡加锁，待机台词、互动台词、
-  外部 `say` 都顶不掉进度；同时全程挂 `加载` 表情表示正在忙，状态结束后自动解锁
-- 「验证台」按钮用默认浏览器打开 `/harness/`（调试面板还在那里）
-
-打包注意：
-
-- `tmp/electron-v33.4.11-win32-x64.zip` 是 Electron 运行时（110MB，国内可直接用 npmmirror 拉）；
-  缺失时先下载这个文件，`npm run pack` 会用它而不再联网。
-- `vendor/live2dcubismcore.min.js` 必须在（专有许可，不入库）；缺了应用启动会提示缺少 Core。
-- 默认模型路径写死在 `app/main.mjs` 的 `DEFAULT_MODEL`，也可用环境变量 `STAGE_MODEL` 覆盖。
-
-## 结构
-
-```
-app/                  Electron 应用壳：透明覆盖层 / 设置窗口 / 动作编辑器 / 穿透与找回
-src/server/           静态服务 + 能力清单 + ActionBus + SSE + 反馈日志（开发服务器与应用壳共用）
-tools/stage-cli.mjs   agent/脚本用命令行：say / expr / pose / look / idle / state / feedback
-docs/SPEC.md          设计决议（窗口 A/B 绑定、冲突分层、区域、档案、许可、渲染内核）
-docs/PROTOCOL.md      接口契约 v1（下行动作 / 上行反馈 / SSE / 快照）
-src/contracts.ts      契约类型
-src/stage/engine.js   渲染内核适配层（唯一直接碰内核的文件）
-src/stage/layers.js   L2 表情叠加 / L5 受控参数 / 部件覆盖
-src/stage/reactions.js 分区反应规则（切换不叠加 / 瞬间与长期两层 / 应用壳共用）
-src/stage/gaze.js     L1 眼 → 头 → 身体三通道跟随
-src/stage/life.js     眨眼 / 耳朵扑棱 / 头发惯性与微风（含一时风 gust）
-src/stage/capture.js  伪面捕：呼吸、Angle/Position 物理输入
-src/stage/pose-bus.js 姿态总线：头/身角度的唯一写入者（物理前喂入、物理后写回，各层只累加）
-src/stage/idle-motions.js 待机动作：常驻微摆 + 随机成套动作（可带小台词）
-src/stage/regions.js  热区入口（barrel）：几何 / 仓库 / 读取器 / 输入按职责拆到 regions/ 下
-src/stage/regions/    geometry（点内判定·包围盒·凸包）· store（增删查·命中·存档）· zones（实时脸/手区·播种）· input（手势）
-src/stage/viewport.js 窗口 A 与模型 B 的绑定、缩放位移
-scripts/serve.mjs     开发版服务 CLI（内部调用 src/server）
-scripts/shot.mjs      无头验证：真实时间等待 → 取样 → 截图
-harness/              验证台：能力清单 / 动作下发 / 参数受控 / 事件日志
-```
-
-## 三条来自实机的约束
-
-1. **每帧结尾有 `loadParameters()`**：自定义层必须写在 `beforeModelUpdate` 当帧才生效；
-   想读回「真正送进绘制的值」，也只能在同一帧那个时刻读。
-2. **`Meta.Loop` 不可信**：这 8 个动作全都标 `Loop:true`，但其中 7 个是切换型一次性动作。
-   循环与否必须由用户标记，不能采信文件。
-3. **模型没有 `HitAreas`**：区域只能来自 PSD 图层（`psd/大肥鱼公皮分享拆分.psd`，3749×7697）。
-
-## 待确认
-
-- `流泪`（`key2`）单独施加看不出水滴，`key7`（脸红）却立竿见影。是模型本身依赖眼型层，还是另有部件开关，待查。
-- 无头环境必须用真实时间等待（`scripts/shot.mjs`）；`--virtual-time-budget` 会把 8192² 贴图解码卡死。
-
-## 许可
-
-- 本仓库代码：MIT。
-- **不含** Cubism Core（Live2D 专有许可，禁止再分发）→ `scripts/fetch-core.mjs` 自行获取。
-- **不含** 大肥鱼模型与 PSD（作者禁止重新分发）→ 由用户自备。
-- 依赖 `pixi.js`、`untitled-pixi-live2d-engine` 均为 MIT，可随代码分发。
-- 发布插件时的首次启动引导：导入模型 + 下载 Core。商业化需另评估 Live2D publication license 与模型作者授权。
-- 署名（合规使用模型时）：原画/拆分 神宫凉子，Live2D 建模 霓虹猫_NeonNeko。
-
-## 许可
-
-- 代码：MIT（见 `LICENSE`）
-- 大肥鱼模型：版权归原作者所有，**不随仓库分发、禁止二次发布**
-- Live2D Cubism Core：Live2D Inc. 专有软件，仅本地构建使用（`vendor/` 已忽略）
+- 本仓库**代码**：MIT，见 [LICENSE](LICENSE)。
+- **不含** Cubism Core（Live2D 专有许可）→ `scripts/fetch-core.mjs` 自行获取。
+- **不含** 大肥鱼模型与 PSD（作者禁止再分发）→ 自行获取，见开头说明。
+- 模型署名（合规使用时）：原画 / 拆分 **神宫凉子**，Live2D 建模 **霓虹猫_NeonNeko**。
+- 依赖 `pixi.js`、`untitled-pixi-live2d-engine` 均为 MIT。
+- 商用需另行评估 Live2D publication license 与模型作者授权。
