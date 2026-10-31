@@ -56,8 +56,9 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
   padding: 9px 16px; border-radius: 22px;
   background: #fdfaf3;
   color: #23283a;
-  border: 3px solid #4a5f9e;
-  box-shadow: 0 8px 20px rgba(10, 18, 38, 0.3);
+  /* 描边取角色本身的天蓝（裙子亮片/尾鳍那一档），跟形象统一 */
+  border: 3px solid #5cc3ef;
+  box-shadow: 0 8px 20px rgba(10, 18, 38, 0.3), 0 0 0 1px rgba(92, 195, 239, 0.25);
   line-height: 1.34; font-weight: 700; letter-spacing: 0.02em;
   text-align: center;
   white-space: pre-wrap; word-break: break-word;
@@ -76,16 +77,18 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 /* 尾巴：两个由大到小的「思考点」，斜着指向角色 */
 #bubble::before, #bubble::after {
   content: ""; position: absolute; border-radius: 50%;
-  background: #fdfaf3; border: 3px solid #4a5f9e;
+  background: #fdfaf3; border: 3px solid #5cc3ef;
   box-sizing: border-box;
 }
 #bubble::before { width: 12px; height: 12px; }
 #bubble::after { width: 7px; height: 7px; border-width: 2px; }
 #bubble[data-anchor="right"][data-side="above"]::before { left: 18px; bottom: -18px; }
 #bubble[data-anchor="right"][data-side="above"]::after { left: 9px; bottom: -32px; }
-/* 居中挂在头顶（两侧都放不下时）：点点放在正下方 */
-#bubble[data-anchor="center"]::before { left: 50%; margin-left: -6px; }
-#bubble[data-anchor="center"]::after { left: 50%; margin-left: -3.5px; }
+/* 居中锚点（贴角/居中挂在头顶）：点点放在正下方、落在「框与头之间」的缝里 */
+#bubble[data-anchor="center"][data-side="above"]::before { left: 50%; margin-left: -6px; bottom: -16px; }
+#bubble[data-anchor="center"][data-side="above"]::after { left: 50%; margin-left: -3.5px; bottom: -28px; }
+#bubble[data-anchor="center"][data-side="below"]::before { left: 50%; margin-left: -6px; top: -16px; }
+#bubble[data-anchor="center"][data-side="below"]::after { left: 50%; margin-left: -3.5px; top: -28px; }
 #bubble[data-anchor="left"][data-side="above"]::before { right: 18px; bottom: -18px; }
 #bubble[data-anchor="left"][data-side="above"]::after { right: 9px; bottom: -32px; }
 #bubble[data-side="below"]::before { top: -18px; }
@@ -95,14 +98,9 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 #bubble[data-anchor="left"][data-side="below"]::before { right: 18px; }
 #bubble[data-anchor="left"][data-side="below"]::after { right: 9px; }
 
-/* 状态色：只换描边，文字仍保持深色可读 */
-#bubble[data-state="thinking"] { border-color: #6b7fc0; }
-#bubble[data-state="thinking"]::before, #bubble[data-state="thinking"]::after { border-color: #6b7fc0; }
-#bubble[data-state="working"] { border-color: #4a7fd0; }
-#bubble[data-state="working"]::before, #bubble[data-state="working"]::after { border-color: #4a7fd0; }
-#bubble[data-state="waiting"] { border-color: #d99a3c; }
-#bubble[data-state="waiting"]::before, #bubble[data-state="waiting"]::after { border-color: #d99a3c; }
-#bubble[data-state="success"] { border-color: #4d9e6f; }
-#bubble[data-state="success"]::before, #bubble[data-state="success"]::after { border-color: #4d9e6f; }
-#bubble[data-state="error"] { border-color: #c75d5d; }
-#bubble[data-state="error"]::before, #bubble[data-state="error"]::after { border-color: #c75d5d; }
+/* 状态色：只改底色氛围，描边保持角色天蓝（不改边色） */
+#bubble[data-state="thinking"] { background: #f4f8fd; }
+#bubble[data-state="working"] { background: #f2f8ff; }
+#bubble[data-state="waiting"] { background: #fff9ee; }
+#bubble[data-state="success"] { background: #f2fbf4; }
+#bubble[data-state="error"] { background: #fdf3f3; }

@@ -814,7 +814,7 @@ function hidePassHint() {
 // 在数值上的含义是窗口尺寸由模型画布推导，而不是反过来测角色包围盒（后者会形成正反馈）。
 const FIT_BASE_W = 540      // zoom = 1 时角色的屏幕宽度（窗口再留出气泡余量）
 const FIT_PAD_X = 0.12      // 左右各 6%：够气泡挂在头侧，又不会把角色缩太小
-const FIT_PAD_Y = 0.10      // 上下各 5%：头顶与裙摆底不会被切
+const FIT_PAD_Y = 0.18      // 上下各 9%：头顶之上要留出「对话框 + 尾巴点点」的整条缝，点点才落在框与头之间
 const FIT_MIN = 0.25
 const FIT_MAX = 4
 
