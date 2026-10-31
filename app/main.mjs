@@ -84,6 +84,10 @@ async function createWindow() {
   })
   win.setBackgroundColor('#00000000')
   win.once('ready-to-show', () => win.show())
+  // 拖动的「收尾」不能只靠渲染层发 drag-end：页面重载/失焦时那个事件不会来，
+  // 定时器会残留并持续把窗口拽向光标。
+  win.webContents.on('did-start-loading', stopWindowDrag)
+  win.on('blur', stopWindowDrag)
 
   // 位置记忆：搬完窗口 500ms 后落盘（拖动过程中不写，避免每帧 IO）
   let moveTimer = null
@@ -166,9 +170,17 @@ function wireFit() {
 // 中键搬窗口：主进程按全局光标锚点搬（读系统光标是绝对量，不会像事件增量那样累积漂移）
 let dragTimer = null
 let dragBase = null
+// 结束拖动：任何「可能收不到 drag-end」的情况（页面重载、焦点丢失、窗口销毁）都要停掉，
+// 否则这个 16ms 定时器会一直把窗口往光标位置拽 —— 表现为窗口自己慢慢漂移。
+function stopWindowDrag() {
+  if (dragTimer) clearInterval(dragTimer)
+  dragTimer = null
+  dragBase = null
+}
 function wireWindowDrag() {
   ipcMain.on('win:drag-begin', () => {
     if (!win) return
+    stopWindowDrag()
     const q = screen.getCursorScreenPoint()
     const [x, y] = win.getPosition()
     dragBase = { cx: q.x, cy: q.y, x, y }
@@ -180,9 +192,7 @@ function wireWindowDrag() {
     }, 16)
   })
   ipcMain.on('win:drag-end', () => {
-    if (dragTimer) clearInterval(dragTimer)
-    dragTimer = null
-    dragBase = null
+    stopWindowDrag()
     if (win && !win.isDestroyed()) {
       const [x, y] = win.getPosition()
       settings.x = x

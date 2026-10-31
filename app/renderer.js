@@ -674,66 +674,90 @@ function bodyAt(x, y) {
   return false
 }
 
-function bindPassThrough() {
+// ---------- 透明处穿透 ----------
+// 判据三条：
+//   1. 指针落在工具条 / 「恢复鼠标」浮标这些 HTML 控件上 → 一律接收（否则开了穿透连按钮都点不到）
+//   2. 手动穿透模式 → 角色也将鼠标穿透（UI 之外一律忽略）
+//   3. 常态 → 按住期间不穿透，其余看角色轮廓掩码
+// 注意：窗口尺寸不再手拖，所以没有「轮廓把手」这一类必须接收的例外了。
+function createPassThrough() {
   let pending = null
   let queued = false
-  // 按住期间一概不穿透：滑出轮廓那一刻若忽略鼠标，pointerup 会丢，抚摸/拖动就卡在按下态
+  let timer = 0
+
+  /** 当前指针位置该不该穿透；没坐标时给 null（不改变现状） */
+  function decide() {
+    if (!pending || !state.settings) return null
+    const el = document.elementFromPoint(pending.x, pending.y)
+    if (el && el.tagName !== 'CANVAS') return false
+    if (state.settings.clickThrough) return true
+    return !state.pointerDown && !bodyAt(pending.x, pending.y)
+  }
+
+  function applyNow() {
+    queued = false
+    const want = decide()
+    if (want == null || want === state.ignoring) return
+    state.ignoring = want
+    shell.setPassThrough(want)
+  }
+
+  return {
+    track(x, y) {
+      pending = { x, y }
+      refreshMask()
+      if (queued) return
+      queued = true
+      // 用 16ms 定时而不是 rAF：窗口被完全遮挡时 rAF 会停，判定就永远不更新
+      clearTimeout(timer)
+      timer = setTimeout(() => perf.time('pass', applyNow), 16)
+    },
+    /** 勾选/取消穿透、松手之后立刻按当前指针重算，不必等鼠标再晃一下 */
+    recompute() { if (pending) perf.time('pass', applyNow) },
+    /** 只算不应用（验证/调试用）：给定坐标下的穿透判定结果 */
+    decideAt(x, y) {
+      const keep = pending
+      pending = { x, y }
+      const want = decide()
+      pending = keep
+      return want
+    },
+  }
+}
+
+/**
+ * 按住期间一概不穿透：滑出轮廓那一刻若忽略鼠标，pointerup 会丢，抚摸/拖动就卡在按下态。
+ */
+function bindPointerHeld() {
   const down = () => { state.pointerDown = true }
   const up = () => { state.pointerDown = false }
   window.addEventListener('pointerdown', down, true)
   window.addEventListener('pointerup', up, true)
   window.addEventListener('pointercancel', up, true)
   window.addEventListener('blur', up)
-  const applyNow = () => {
-    queued = false
-    if (!pending || !state.settings) return
-    // 判据三条：
-    //   1. 指针在面板/工具条/浮标上 → 一律接收（否则勾了穿透连面板都点不动）
-    //   2. 手动穿透模式 → 角色也穿（UI 之外一律忽略）
-    //   3. 常态 → 按住不穿，其余按角色轮廓掩码
-    let want
-    const el = document.elementFromPoint(pending.x, pending.y)
-    const onHandle = !!el && !!el.classList && el.classList.contains('rz')
-    if (el && el.tagName !== 'CANVAS' && !onHandle) want = false
-    else if (state.settings.clickThrough) want = true
-    else if (onHandle) want = false   // 贴着边角才能抓住、改窗口大小
-    else want = !state.pointerDown && !bodyAt(pending.x, pending.y)
-    if (want === state.ignoring) return
-    state.ignoring = want
-    shell.setPassThrough(want)
-  }
-  const apply = () => perf.time('pass', applyNow)
-  // 勾选/取消穿透后立刻按当前指针重算，不必等鼠标晃一下
-  state.recomputePass = () => { if (pending) apply() }
-  window.addEventListener('pointermove', (e) => {
-    pending = { x: e.clientX, y: e.clientY }
-    refreshMask()
-    if (queued) return
-    queued = true
-    requestAnimationFrame(apply)
-  })
-  window.addEventListener('resize', () => refreshMask(true))
-  refreshMask(true)
-  // 掩码读回挂在「每帧画完」之后：只读像素，不额外渲染。
-  // 拖动窗口期间先攒着（轮廓没变，读了也没人用），拖动结束自然补上。
+}
+
+/** 轮廓掩码读回：挂在「每帧画完」之后，只读像素、不额外渲染；拖窗口期间先攒着 */
+function startMaskCapture() {
   state.stage?.afterRender?.(() => {
     if (!state.maskPending || state.windowDragging) return
     state.maskPending = false
     const m = perf.time('mask', () => state.stage.captureMask?.(MASK_SCALE, (k, ms) => perf.mark(`m.${k}`, ms)))
     if (m) { state.mask = m; state.maskAt = performance.now() }
   })
-  // 验证钩子（和 harness 里的 __reaction 一样，只为无头检查）
-  window.__layout = () => ({
-    win: [window.innerWidth, window.innerHeight],
-    pos: [Math.round(window.screenX), Math.round(window.screenY)],
-    offsetX: state.viewport?.view.offsetX ?? null,
-    model: state.stage ? [Math.round(state.stage.model.position.x), Math.round(state.stage.model.position.y)] : null,
-    gaze: state.gaze?.state?.().target ?? null,
-    gazeLast: window.__gazeLast || null,
-    sway: state.petSway?.state?.() ?? null,
-    angles: state.stage ? ['ParamAngleX', 'ParamAngleY', 'ParamAngleZ'].map((id) => Math.round(state.stage.param.get(id) * 10) / 10) : null,
-    lean: state.stage ? Math.round(state.stage.param.get('LeanInput') * 10) / 10 : null,
-  })
+}
+
+function bindPassThrough() {
+  const pass = createPassThrough()
+  state.passThrough = pass // 调试/验证入口（__pass.passAt）
+  state.recomputePass = () => pass.recompute()
+  bindPointerHeld()
+  window.addEventListener('pointermove', (e) => pass.track(e.clientX, e.clientY))
+  // 松手时指针可能已经在轮廓外，重算一次才不会停在「按下态不穿透」
+  window.addEventListener('pointerup', () => pass.recompute())
+  window.addEventListener('resize', () => refreshMask(true))
+  startMaskCapture()
+  refreshMask(true)
 }
 
 // ---------- 穿透模式 ----------
@@ -868,6 +892,9 @@ function bindWindowDrag() {
   // 左键按住角色拖 = 搬窗口（按在分区上不算）；中键另有一套（见 bindMiddleDrag）
   dragWindow(stage, { canStart: (e) => !state.regionInput?.pressed?.region && bodyAt(e.clientX, e.clientY) })
   bindMiddleDrag(stage)
+  // 兜底：页面卸载/失焦时收不到 pointerup，主进程的拖动定时器必须显式停掉
+  window.addEventListener('pagehide', () => shell.dragEnd())
+  window.addEventListener('blur', () => shell.dragEnd())
 }
 
 /**
@@ -1408,7 +1435,22 @@ function installProbes({ motionState } = {}) {
       return box
     },
     state: () => ({ ignoring: state.ignoring, clickThrough: state.settings?.clickThrough, pointerDown: state.pointerDown }),
+    /** 给定客户端坐标的穿透判定（只算不应用，不受事件送达影响） */
+    passAt: (x, y) => state.passThrough?.decideAt(x, y) ?? null,
   }
+
+  // 布局 / 跟随的验证钩子（和 harness 里的 __reaction 一样，只为无头检查）
+  window.__layout = () => ({
+    win: [window.innerWidth, window.innerHeight],
+    pos: [Math.round(window.screenX), Math.round(window.screenY)],
+    offsetX: state.viewport?.view.offsetX ?? null,
+    offsetY: state.viewport?.view.offsetY ?? null,
+    model: state.stage ? [Math.round(state.stage.model.position.x), Math.round(state.stage.model.position.y)] : null,
+    gaze: state.gaze?.state?.().target ?? null,
+    sway: state.petSway?.state?.() ?? null,
+    angles: state.stage ? ['ParamAngleX', 'ParamAngleY', 'ParamAngleZ'].map((id) => Math.round(state.stage.param.get(id) * 10) / 10) : null,
+    lean: state.stage ? Math.round(state.stage.param.get('LeanInput') * 10) / 10 : null,
+  })
 }
 
 main()
