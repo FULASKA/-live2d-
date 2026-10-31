@@ -1,5 +1,10 @@
 /* 应用壳：整窗透明，角色浮在桌面上 */
-html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+/* 覆盖层不可选中：气泡是角色在「说话」，不是可复制的正文；拖窗口/划过时也不该拉出一片蓝色选区。
+   设置窗口与编辑器是普通窗口，走各自 CSS，不受这里影响。 */
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden;
+  user-select: none; -webkit-user-select: none; cursor: default;
+}
 body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; color: #e8eef8; }
 
 #stage { position: fixed; inset: 0; touch-action: none; cursor: grab; }
@@ -69,6 +74,7 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
   white-space: pre-wrap; word-break: break-word;
   overflow-wrap: anywhere;
   pointer-events: none;
+  user-select: none; -webkit-user-select: none;
   opacity: 0; transform: translateY(4px) scale(0.97);
   transition: opacity 0.16s ease, transform 0.16s ease;
   scrollbar-width: thin; scrollbar-color: rgba(70, 105, 165, 0.45) transparent;
