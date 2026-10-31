@@ -346,193 +346,7 @@ async function bootStage() {
   })
 
   // ---------- 标定探针（开发期用：单参数覆写 / 物理读回采样） ----------
-  window.__probe = {
-    /** 覆写一个参数（持续生效，直到 clear） */
-    param(id, v, blend = 'Overwrite') {
-      state.layers.removeSource('probe')
-      state.layers.addExpression('probe', [{ Id: id, Value: v, Blend: blend }], { fade: 0, source: 'probe' })
-    },
-    /** 一组参数同时覆写 */
-    params(list, blend = 'Overwrite') {
-      state.layers.removeSource('probe')
-      state.layers.addExpression('probe', list.map(([Id, Value]) => ({ Id, Value, Blend: blend })), { fade: 0, source: 'probe' })
-    },
-    clear() { state.layers.removeSource('probe') },
-    /** 诊断：直接写核心参数并立刻读回（判断「写不进去」还是「写完又被覆盖」） */
-    setRead(id, v) {
-      const idx = state.stage.param.index(id)
-      const before = state.stage.param.get(id)
-      state.stage.param.set(id, v)
-      const after = state.stage.param.get(id)
-      return { id, idx, before, after }
-    },
-    /** 诊断：在 beforeModelUpdate 末尾（各层写完之后）读一次 */
-    readAtUpdate(id) {
-      return new Promise((resolve) => {
-        const off = state.stage.onBeforeUpdate(() => { const v = state.stage.param.get(id); off(); resolve(v) })
-      })
-    },
-    /** 诊断：一次分层写入，在物理前/更新前各读一次值（判断写点与覆盖） */
-    traceWrite(id, v) {
-      state.layers.removeSource('probe')
-      state.layers.addExpression('probe', [{ Id: id, Value: v, Blend: 'Overwrite' }], { fade: 0, source: 'probe' })
-      return new Promise((resolve) => {
-        const out = []
-        const offPre = state.stage.onBeforePhysics(() => out.push(['pre', state.stage.param.get(id)]))
-        const offPost = state.stage.onBeforeUpdate(() => out.push(['post', state.stage.param.get(id)]))
-        setTimeout(() => {
-          offPre(); offPost(); state.layers.removeSource('probe')
-          resolve({ out: out.slice(0, 6), isIn: state.physics.inputs.has(id), isOut: state.physics.outputs.has(id) })
-        }, 150)
-      })
-    },
-    // ---- 捏脸 / 活气 / 嘴的探针 ----
-    pinch(side = 'L', px = 320) { state.facePinch?.grab(side); state.facePinch?.move(px, 0) },
-    pinchEnd() { state.facePinch?.release() },
-    pinchState: () => state.facePinch?.state() ?? null,
-    flap(side = 'L', amp = 1) { state.life?.flap(side, amp) },
-    life: () => state.life?.state() ?? null,
-    talk(v = 0) { state.mouth?.speak(v) },
-    /** 直接触发某个部位的情绪嘴形（截图/验证用，等价于摸到那个部位） */
-    mood(name) {
-      const m = REGION_MOUTH[name]
-      if (m) state.mouth?.setMood(m, m.ms)
-      return m ? { name, ...m } : null
-    },
-    moods: () => Object.keys(REGION_MOUTH),
-    clearMood() { state.mouth?.clearMood() },
-    faces: () => state.idleFaces?.presets() ?? [],
-    face(name) { return state.idleFaces?.trigger(name) ?? null },
-    faceState: () => state.idleFaces?.state() ?? null,
-    /** 终点姿势：预设清单 / 切换 / 状态（数值来自模型自带 motion3 末帧） */
-    poses: () => state.poses?.presets() ?? [],
-    pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
-    poseState: () => state.poses?.state() ?? null,
-    /** 气泡：说一句 / 换文字 / 收起 / 读状态（验证自适应排版用） */
-    bubble(text, st) {
-      if (!state.bubble) return null
-      if (text == null) { state.bubble.hide(); return null }
-      state.bubble.show(String(text), { state: st })
-      return state.bubble.state()
-    },
-    bubbleHide() { state.bubble?.hide() },
-    bubbleState: () => state.bubble?.state() ?? null,
-    bubbleSide(side) { state.bubble?.setSide(side) },
-    /** 说一句预设台词（thinking / working / waiting / success / error / head / hand …） */
-    say(key, ms = 0) { return state.bubble?.say(key, { ms }) ?? null },
-    /** 模拟一条 DSH 状态（不接插件时也能验证联动） */
-    agent(snap) { state.agentLink?.apply(snap) },
-    agentState: () => state.agentLink?.state() ?? null,
-    // ---- 改动补丁 ----
-    patchExport: () => exportStagePatch(),
-    patchState: () => state.patch ? { model: state.patch.model, poses: Object.keys(state.patch.poses || {}), phrases: Object.keys(state.patch.phrases || {}), regions: state.patch.regions?.regions?.length ?? 0 } : null,
-    /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
-    pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
-    mouth: () => state.mouth?.state() ?? null,
-    earNow: () => ['LEar1', 'LEar2', 'LEar3', 'REar1', 'ParamMouthOpenY', 'LeanInput', 'ParamAngleZ']
-      .map((id) => `${id}=${Math.round((state.stage.param.get(id) || 0) * 100) / 100}`).join(' '),
-    read: (id) => state.stage.param.get(id),
-    /** 参数的定义区间（判断某个值是不是「超出范围被钳住」） */
-    info: (id) => state.stage.param.info(id),
-    /** 当前左右脸热区的包围盒（模型像素）——用来量化「仰头让脸变宽」 */
-    faceBox() {
-      const rs = (state.store?.all || []).filter((r) => r.name === '左脸' || r.name === '右脸')
-      if (!rs.length) return null
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-      for (const r of rs) {
-        for (const p of r.points || []) {
-          if (p[0] < minX) minX = p[0]
-          if (p[0] > maxX) maxX = p[0]
-          if (p[1] < minY) minY = p[1]
-          if (p[1] > maxY) maxY = p[1]
-        }
-      }
-      return { w: Math.round(maxX - minX), h: Math.round(maxY - minY), y: Math.round((minY + maxY) / 2) }
-    },
-    /** 物理输出参数在 onBeforeUpdate（物理之后）还有没有值？
-     *  有值 → 可以「叠加」；读到 0 → 只能整层接管。
-     */
-    physicsSample(ids = ['LEar1', 'LEar2', 'LEar3', 'FrontHairY1', 'SideHairY1', 'LateHairY1'], frames = 90) {
-      return new Promise((resolve) => {
-        const acc = {}
-        for (const id of ids) acc[id] = { min: Infinity, max: -Infinity, n: 0, last: null }
-        let left = frames
-        const off = state.stage.onBeforeUpdate(() => {
-          for (const id of ids) {
-            const v = state.stage.param.get(id)
-            if (v == null) continue
-            const a = acc[id]
-            if (v < a.min) a.min = v
-            if (v > a.max) a.max = v
-            a.last = Math.round(v * 100) / 100
-            a.n += 1
-          }
-          if (--left <= 0) {
-            off()
-            for (const id of ids) {
-              acc[id].min = Math.round(acc[id].min * 100) / 100
-              acc[id].max = Math.round(acc[id].max * 100) / 100
-            }
-            resolve(acc)
-          }
-        })
-      })
-    },
-    /** 物理「算之前」这一瞬看到的参数值 —— 判断物理到底吃到了什么 */
-    preSample(ids = ['ParamAngleZ', 'ParamAngleY', 'ParamAngleX', 'ParamBreath', 'LeanInput', 'LEar1', 'FrontHairY1'], frames = 60) {
-      return new Promise((resolve) => {
-        const acc = {}
-        for (const id of ids) acc[id] = { min: Infinity, max: -Infinity, n: 0 }
-        let left = frames
-        const off = state.stage.onBeforePhysics(() => {
-          for (const id of ids) {
-            const v = state.stage.param.get(id)
-            if (v == null) continue
-            const a = acc[id]
-            if (v < a.min) a.min = v
-            if (v > a.max) a.max = v
-            a.n += 1
-          }
-          if (--left <= 0) {
-            off()
-            for (const id of ids) {
-              acc[id].min = Math.round(acc[id].min * 10) / 10
-              acc[id].max = Math.round(acc[id].max * 10) / 10
-            }
-            resolve(acc)
-          }
-        })
-      })
-    },
-    phys: () => state.stage.physicsInfo(),
-    cap: () => state.capture?.state() ?? null,
-    posture: () => state.posture?.state() ?? null,
-    motion: () => ({
-      vx: Math.round(motionState.vx), vy: Math.round(motionState.vy),
-      ax: Math.round(motionState.ax), ay: Math.round(motionState.ay),
-      life: state.life?.state?.().ext ?? null,
-    }),
-    /** 用 shell.moveBy 摇窗口，模拟拖动带来的加速度（CDP 移动不了真实窗口） */
-    shakeWindow(px = 36, steps = 24, interval = 40) {
-      let i = 0
-      const id = setInterval(() => {
-        shell.moveBy(i % 2 ? px : -px, 0)
-        if (++i >= steps) clearInterval(id)
-      }, interval)
-    },
-    /** 关掉桌面光标反馈，让探针的合成鼠标事件不被真实光标覆盖 */
-    desktopGaze(on) { window.__noDesktopGaze = !on },
-    /** 在物理之前强行钉住某些参数（测物理响应用） */
-    holdPre(list) {      state._holdPreOff?.()
-      state._holdPreOff = state.stage.onBeforePhysics(() => {
-        for (const [id, v] of list) state.stage.param.set(id, v)
-      })
-    },
-    holdPreOff() { state._holdPreOff?.(); state._holdPreOff = null },
-    /** 关掉自制活气层，用来单独观察模型自带物理 */
-    lifeOff() { state.life.set({ windAmp: 0, windAmpX: 0, earTremor: 0, earAmp: 0, jewelAmp: 0, inertiaX: 0, inertiaY: 0, earMin: 9999, earMax: 9999 }) },
-    lifeOn() { state.life.set({ windAmp: 0.035, windAmpX: 0.02, earTremor: 0.012, earAmp: 1, jewelAmp: 0.3, inertiaX: 0.85, inertiaY: 1, earMin: 5.5, earMax: 13 }) },
-  }
+  installProbes({ motionState })
 
   const viewport = createViewport({ model: stage.model, app: stage.app })
   state.viewport = viewport
@@ -920,161 +734,6 @@ function bindPassThrough() {
     angles: state.stage ? ['ParamAngleX', 'ParamAngleY', 'ParamAngleZ'].map((id) => Math.round(state.stage.param.get(id) * 10) / 10) : null,
     lean: state.stage ? Math.round(state.stage.param.get('LeanInput') * 10) / 10 : null,
   })
-  window.__pass = {
-    bodyAt,
-    refreshMask,
-    sway: (name) => state.petSway?.trigger(name),
-    charRight: () => Math.round(charRightClient()),
-    face: () => state.facePinch?.state() ?? null,
-    faceCenter: () => {
-      const r = state.store?.all?.find((x) => x.name === '脸')
-      if (!r || !r.points?.length) return null
-      const cx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length
-      const cy = r.points.reduce((s, p) => s + p[1], 0) / r.points.length
-      const st = state.stage
-      const cr = st.canvas.getBoundingClientRect()
-      const sc = st.model.scale.x
-      const ms = st.modelSize()
-      return {
-        x: cr.left + st.model.position.x + (cx - ms.width / 2) * sc,
-        y: cr.top + st.model.position.y + (cy - ms.height / 2) * sc,
-      }
-    },
-    regions: () => (state.store?.all || []).map((r) => ({ name: r.name, z: r.z })),
-    /** 当前在场的表情层（验证「摸手不该出竖食指」用） */
-    exprs: () => state.layers?.inspect?.() ?? null,
-    handBoxes: () => (state.store?.all || []).filter((r) => r.name === '左手' || r.name === '右手').map((r) => {
-      const xs = (r.points || []).map((p) => p[0])
-      const ys = (r.points || []).map((p) => p[1])
-      return { name: r.name, z: r.z, minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) }
-    }),
-    handCount: () => state.handReader?.count?.() ?? -1,
-    /** 热区 → 客户端像素矩形（调热区位置用） */
-    screenBox: (name) => regionScreenBox(name),
-    /** 绘制顺序排查：按部件名列出 drawable 的序号与不透明度（判断手有没有被裙子盖住） */
-    partOpacity(name) {
-      const st = state.stage
-      const p = (state.caps.parts || []).find((x) => x.name === name)
-      if (!st || !p) return null
-      return st.part?.get?.(p.id) ?? null
-    },
-    partSet(name, v) {
-      const st = state.stage
-      const p = (state.caps.parts || []).find((x) => x.name === name)
-      if (!st || !p) return false
-      st.part?.set?.(p.id, v)
-      return true
-    },
-    drawables(filter) {
-      const out = []
-      const core = state.stage?.core
-      if (!core) return out
-      for (let i = 0; i < core.getDrawableCount(); i++) {
-        let parent = -1
-        try { parent = core.getDrawableParentPartIndex(i) } catch { continue }
-        if (parent < 0) continue
-        let name = ''
-        try {
-          const pid = core.getPartId(parent).getString().s
-          name = state.caps.parts.find((p) => p.id === pid)?.name || ''
-        } catch {}
-        if (filter && !name.includes(filter)) continue
-        out.push({ i, part: name, op: Math.round((core.getDrawableOpacity(i) || 0) * 100) / 100 })
-      }
-      return out
-    },
-    leanState: () => {
-      const def = (state.caps?.expressions || []).find((x) => x.name === '前倾')
-      const keys = def ? Object.keys(def.params) : []
-      return {
-        def: def ? def.params : null,
-        active: !!state.layers?.hasExpression?.('前倾'),
-        values: keys.map((k) => [k, state.stage?.param.get(k), state.stage?.param.info(k)?.min, state.stage?.param.info(k)?.max]),
-      }
-    },
-    tryLean: () => toggleLean(),
-    cheekTest: (s) => state.facePinch?.test(s),
-    faceVerts: () => {
-      // 「脸」部件所有网格顶点的平均坐标（看变形是否真的动）
-      const core = state.stage.core
-      const im = state.stage.model.internalModel
-      let sx = 0, sy = 0, n2 = 0
-      const n = core.getDrawableCount()
-      for (let i = 0; i < n; i++) {
-        let parent = -1
-        try { parent = core.getDrawableParentPartIndex(i) } catch { continue }
-        if (parent < 0) continue
-        let name = ''
-        try { name = state.caps.parts.find((p) => p.id === core.getPartId(parent).getString().s)?.name || '' } catch {}
-        if (!/^脸$|^脸底$/.test(name)) continue
-        let v = null
-        try { v = im.getDrawableVertices(i) } catch { continue }
-        if (!v) continue
-        for (let k = 0; k < v.length; k += 2) { sx += v[k]; sy += v[k + 1]; n2++ }
-      }
-      return n2 ? { x: Math.round(sx / n2), y: Math.round(sy / n2), n: n2 } : null
-    },
-    regionAt: (x, y) => regionAtClient(x, y)?.name ?? null,
-    regionCenter: (name) => {
-      const r = state.store?.all?.find((x) => x.name === name)
-      if (!r || !r.points?.length) return null
-      const mx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length
-      const my = r.points.reduce((s, p) => s + p[1], 0) / r.points.length
-      return state.viewport.modelToScreen(mx, my)
-    },
-    regionDebug: (x, y) => {
-      const p = state.viewport.clientToModel(x, y)
-      const rows = (state.store?.all || []).map((r) => {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-        for (const [px, py] of r.points || []) {
-          if (px < minX) minX = px
-          if (px > maxX) maxX = px
-          if (py < minY) minY = py
-          if (py > maxY) maxY = py
-        }
-        return { name: r.name, z: r.z, minX: Math.round(minX), minY: Math.round(minY), maxX: Math.round(maxX), maxY: Math.round(maxY) }
-      })
-      return { model: { x: Math.round(p.x), y: Math.round(p.y) }, rows }
-    },
-    zoom: (z) => state.viewport.set({ zoom: z }),
-    pinchTest: (dx, dy) => { state.facePinch.grab(); state.facePinch.move(dx, dy) },
-    pinchReset: () => state.facePinch.release(),
-    mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
-    /** 视口状态（缩放/偏移/实际像素缩放）—— 排查「窗口跟着角色」时的落点 */
-    view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
-    /** 真实轮廓在窗口里的包围盒（客户端像素）+ 相对窗口中心的偏移 dx/dy */
-    maskBox: () => {
-      const m = state.mask || refreshMask(true)
-      if (!m?.data) return null
-      let minX = m.w, maxX = -1, minY = m.h, maxY = -1
-      for (let y = 0; y < m.h; y++) {
-        for (let x = 0; x < m.w; x++) {
-          if (m.data[y * m.w + x] > 8) {
-            if (x < minX) minX = x
-            if (x > maxX) maxX = x
-            if (y < minY) minY = y
-            if (y > maxY) maxY = y
-          }
-        }
-      }
-      if (maxX < 0) return null
-      const W = window.innerWidth
-      const H = window.innerHeight
-      const box = {
-        left: +((minX / m.w) * W).toFixed(1),
-        top: +((minY / m.h) * H).toFixed(1),
-        right: +(((maxX + 1) / m.w) * W).toFixed(1),
-        bottom: +(((maxY + 1) / m.h) * H).toFixed(1),
-      }
-      box.w = +(box.right - box.left).toFixed(1)
-      box.h = +(box.bottom - box.top).toFixed(1)
-      box.dx = +((box.left + box.right) / 2 - W / 2).toFixed(1)
-      box.dy = +((box.top + box.bottom) / 2 - H / 2).toFixed(1)
-      box.margin = { left: +box.left.toFixed(0), top: +box.top.toFixed(0), right: +(W - box.right).toFixed(0), bottom: +(H - box.bottom).toFixed(0) }
-      return box
-    },
-    state: () => ({ ignoring: state.ignoring, clickThrough: state.settings?.clickThrough, pointerDown: state.pointerDown }),
-  }
 }
 
 // ---------- 穿透模式 ----------
@@ -1398,6 +1057,358 @@ function bindTools() {
   })
   $('#tool-settings')?.addEventListener('click', () => { hideTools(); shell.openSettings?.() })
   $('#tool-quit')?.addEventListener('click', () => shell.quit())
+}
+
+/**
+ * 调试探针（window.__probe / window.__pass）。
+ *
+ * 从 bootStage 与 bindPassThrough 里搬出来的：它们是开发期工具，不该和启动流程、
+ * 穿透状态机缠在同一个函数里。除 motionState（惯性数值）外，全部依赖模块作用域。
+ */
+function installProbes({ motionState } = {}) {
+  window.__probe = {
+    /** 覆写一个参数（持续生效，直到 clear） */
+    param(id, v, blend = 'Overwrite') {
+      state.layers.removeSource('probe')
+      state.layers.addExpression('probe', [{ Id: id, Value: v, Blend: blend }], { fade: 0, source: 'probe' })
+    },
+    /** 一组参数同时覆写 */
+    params(list, blend = 'Overwrite') {
+      state.layers.removeSource('probe')
+      state.layers.addExpression('probe', list.map(([Id, Value]) => ({ Id, Value, Blend: blend })), { fade: 0, source: 'probe' })
+    },
+    clear() { state.layers.removeSource('probe') },
+    /** 诊断：直接写核心参数并立刻读回（判断「写不进去」还是「写完又被覆盖」） */
+    setRead(id, v) {
+      const idx = state.stage.param.index(id)
+      const before = state.stage.param.get(id)
+      state.stage.param.set(id, v)
+      const after = state.stage.param.get(id)
+      return { id, idx, before, after }
+    },
+    /** 诊断：在 beforeModelUpdate 末尾（各层写完之后）读一次 */
+    readAtUpdate(id) {
+      return new Promise((resolve) => {
+        const off = state.stage.onBeforeUpdate(() => { const v = state.stage.param.get(id); off(); resolve(v) })
+      })
+    },
+    /** 诊断：一次分层写入，在物理前/更新前各读一次值（判断写点与覆盖） */
+    traceWrite(id, v) {
+      state.layers.removeSource('probe')
+      state.layers.addExpression('probe', [{ Id: id, Value: v, Blend: 'Overwrite' }], { fade: 0, source: 'probe' })
+      return new Promise((resolve) => {
+        const out = []
+        const offPre = state.stage.onBeforePhysics(() => out.push(['pre', state.stage.param.get(id)]))
+        const offPost = state.stage.onBeforeUpdate(() => out.push(['post', state.stage.param.get(id)]))
+        setTimeout(() => {
+          offPre(); offPost(); state.layers.removeSource('probe')
+          resolve({ out: out.slice(0, 6), isIn: state.physics.inputs.has(id), isOut: state.physics.outputs.has(id) })
+        }, 150)
+      })
+    },
+    // ---- 捏脸 / 活气 / 嘴的探针 ----
+    pinch(side = 'L', px = 320) { state.facePinch?.grab(side); state.facePinch?.move(px, 0) },
+    pinchEnd() { state.facePinch?.release() },
+    pinchState: () => state.facePinch?.state() ?? null,
+    flap(side = 'L', amp = 1) { state.life?.flap(side, amp) },
+    life: () => state.life?.state() ?? null,
+    talk(v = 0) { state.mouth?.speak(v) },
+    /** 直接触发某个部位的情绪嘴形（截图/验证用，等价于摸到那个部位） */
+    mood(name) {
+      const m = REGION_MOUTH[name]
+      if (m) state.mouth?.setMood(m, m.ms)
+      return m ? { name, ...m } : null
+    },
+    moods: () => Object.keys(REGION_MOUTH),
+    clearMood() { state.mouth?.clearMood() },
+    faces: () => state.idleFaces?.presets() ?? [],
+    face(name) { return state.idleFaces?.trigger(name) ?? null },
+    faceState: () => state.idleFaces?.state() ?? null,
+    /** 终点姿势：预设清单 / 切换 / 状态（数值来自模型自带 motion3 末帧） */
+    poses: () => state.poses?.presets() ?? [],
+    pose(name, ms = 260) { return state.poses?.set(name, ms) ?? false },
+    poseState: () => state.poses?.state() ?? null,
+    /** 气泡：说一句 / 换文字 / 收起 / 读状态（验证自适应排版用） */
+    bubble(text, st) {
+      if (!state.bubble) return null
+      if (text == null) { state.bubble.hide(); return null }
+      state.bubble.show(String(text), { state: st })
+      return state.bubble.state()
+    },
+    bubbleHide() { state.bubble?.hide() },
+    bubbleState: () => state.bubble?.state() ?? null,
+    bubbleSide(side) { state.bubble?.setSide(side) },
+    /** 说一句预设台词（thinking / working / waiting / success / error / head / hand …） */
+    say(key, ms = 0) { return state.bubble?.say(key, { ms }) ?? null },
+    /** 模拟一条 DSH 状态（不接插件时也能验证联动） */
+    agent(snap) { state.agentLink?.apply(snap) },
+    agentState: () => state.agentLink?.state() ?? null,
+    // ---- 改动补丁 ----
+    patchExport: () => exportStagePatch(),
+    patchState: () => state.patch ? { model: state.patch.model, poses: Object.keys(state.patch.poses || {}), phrases: Object.keys(state.patch.phrases || {}), regions: state.patch.regions?.regions?.length ?? 0 } : null,
+    /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
+    pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
+    mouth: () => state.mouth?.state() ?? null,
+    earNow: () => ['LEar1', 'LEar2', 'LEar3', 'REar1', 'ParamMouthOpenY', 'LeanInput', 'ParamAngleZ']
+      .map((id) => `${id}=${Math.round((state.stage.param.get(id) || 0) * 100) / 100}`).join(' '),
+    read: (id) => state.stage.param.get(id),
+    /** 参数的定义区间（判断某个值是不是「超出范围被钳住」） */
+    info: (id) => state.stage.param.info(id),
+    /** 当前左右脸热区的包围盒（模型像素）——用来量化「仰头让脸变宽」 */
+    faceBox() {
+      const rs = (state.store?.all || []).filter((r) => r.name === '左脸' || r.name === '右脸')
+      if (!rs.length) return null
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const r of rs) {
+        for (const p of r.points || []) {
+          if (p[0] < minX) minX = p[0]
+          if (p[0] > maxX) maxX = p[0]
+          if (p[1] < minY) minY = p[1]
+          if (p[1] > maxY) maxY = p[1]
+        }
+      }
+      return { w: Math.round(maxX - minX), h: Math.round(maxY - minY), y: Math.round((minY + maxY) / 2) }
+    },
+    /** 物理输出参数在 onBeforeUpdate（物理之后）还有没有值？
+     *  有值 → 可以「叠加」；读到 0 → 只能整层接管。
+     */
+    physicsSample(ids = ['LEar1', 'LEar2', 'LEar3', 'FrontHairY1', 'SideHairY1', 'LateHairY1'], frames = 90) {
+      return new Promise((resolve) => {
+        const acc = {}
+        for (const id of ids) acc[id] = { min: Infinity, max: -Infinity, n: 0, last: null }
+        let left = frames
+        const off = state.stage.onBeforeUpdate(() => {
+          for (const id of ids) {
+            const v = state.stage.param.get(id)
+            if (v == null) continue
+            const a = acc[id]
+            if (v < a.min) a.min = v
+            if (v > a.max) a.max = v
+            a.last = Math.round(v * 100) / 100
+            a.n += 1
+          }
+          if (--left <= 0) {
+            off()
+            for (const id of ids) {
+              acc[id].min = Math.round(acc[id].min * 100) / 100
+              acc[id].max = Math.round(acc[id].max * 100) / 100
+            }
+            resolve(acc)
+          }
+        })
+      })
+    },
+    /** 物理「算之前」这一瞬看到的参数值 —— 判断物理到底吃到了什么 */
+    preSample(ids = ['ParamAngleZ', 'ParamAngleY', 'ParamAngleX', 'ParamBreath', 'LeanInput', 'LEar1', 'FrontHairY1'], frames = 60) {
+      return new Promise((resolve) => {
+        const acc = {}
+        for (const id of ids) acc[id] = { min: Infinity, max: -Infinity, n: 0 }
+        let left = frames
+        const off = state.stage.onBeforePhysics(() => {
+          for (const id of ids) {
+            const v = state.stage.param.get(id)
+            if (v == null) continue
+            const a = acc[id]
+            if (v < a.min) a.min = v
+            if (v > a.max) a.max = v
+            a.n += 1
+          }
+          if (--left <= 0) {
+            off()
+            for (const id of ids) {
+              acc[id].min = Math.round(acc[id].min * 10) / 10
+              acc[id].max = Math.round(acc[id].max * 10) / 10
+            }
+            resolve(acc)
+          }
+        })
+      })
+    },
+    phys: () => state.stage.physicsInfo(),
+    cap: () => state.capture?.state() ?? null,
+    posture: () => state.posture?.state() ?? null,
+    motion: () => ({
+      vx: Math.round(motionState.vx), vy: Math.round(motionState.vy),
+      ax: Math.round(motionState.ax), ay: Math.round(motionState.ay),
+      life: state.life?.state?.().ext ?? null,
+    }),
+    /** 用 shell.moveBy 摇窗口，模拟拖动带来的加速度（CDP 移动不了真实窗口） */
+    shakeWindow(px = 36, steps = 24, interval = 40) {
+      let i = 0
+      const id = setInterval(() => {
+        shell.moveBy(i % 2 ? px : -px, 0)
+        if (++i >= steps) clearInterval(id)
+      }, interval)
+    },
+    /** 关掉桌面光标反馈，让探针的合成鼠标事件不被真实光标覆盖 */
+    desktopGaze(on) { window.__noDesktopGaze = !on },
+    /** 在物理之前强行钉住某些参数（测物理响应用） */
+    holdPre(list) {      state._holdPreOff?.()
+      state._holdPreOff = state.stage.onBeforePhysics(() => {
+        for (const [id, v] of list) state.stage.param.set(id, v)
+      })
+    },
+    holdPreOff() { state._holdPreOff?.(); state._holdPreOff = null },
+    /** 关掉自制活气层，用来单独观察模型自带物理 */
+    lifeOff() { state.life.set({ windAmp: 0, windAmpX: 0, earTremor: 0, earAmp: 0, jewelAmp: 0, inertiaX: 0, inertiaY: 0, earMin: 9999, earMax: 9999 }) },
+    lifeOn() { state.life.set({ windAmp: 0.035, windAmpX: 0.02, earTremor: 0.012, earAmp: 1, jewelAmp: 0.3, inertiaX: 0.85, inertiaY: 1, earMin: 5.5, earMax: 13 }) },
+  }
+
+  window.__pass = {
+    bodyAt,
+    refreshMask,
+    sway: (name) => state.petSway?.trigger(name),
+    charRight: () => Math.round(charRightClient()),
+    face: () => state.facePinch?.state() ?? null,
+    faceCenter: () => {
+      const r = state.store?.all?.find((x) => x.name === '脸')
+      if (!r || !r.points?.length) return null
+      const cx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length
+      const cy = r.points.reduce((s, p) => s + p[1], 0) / r.points.length
+      const st = state.stage
+      const cr = st.canvas.getBoundingClientRect()
+      const sc = st.model.scale.x
+      const ms = st.modelSize()
+      return {
+        x: cr.left + st.model.position.x + (cx - ms.width / 2) * sc,
+        y: cr.top + st.model.position.y + (cy - ms.height / 2) * sc,
+      }
+    },
+    regions: () => (state.store?.all || []).map((r) => ({ name: r.name, z: r.z })),
+    /** 当前在场的表情层（验证「摸手不该出竖食指」用） */
+    exprs: () => state.layers?.inspect?.() ?? null,
+    handBoxes: () => (state.store?.all || []).filter((r) => r.name === '左手' || r.name === '右手').map((r) => {
+      const xs = (r.points || []).map((p) => p[0])
+      const ys = (r.points || []).map((p) => p[1])
+      return { name: r.name, z: r.z, minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) }
+    }),
+    handCount: () => state.handReader?.count?.() ?? -1,
+    /** 热区 → 客户端像素矩形（调热区位置用） */
+    screenBox: (name) => regionScreenBox(name),
+    /** 绘制顺序排查：按部件名列出 drawable 的序号与不透明度（判断手有没有被裙子盖住） */
+    partOpacity(name) {
+      const st = state.stage
+      const p = (state.caps.parts || []).find((x) => x.name === name)
+      if (!st || !p) return null
+      return st.part?.get?.(p.id) ?? null
+    },
+    partSet(name, v) {
+      const st = state.stage
+      const p = (state.caps.parts || []).find((x) => x.name === name)
+      if (!st || !p) return false
+      st.part?.set?.(p.id, v)
+      return true
+    },
+    drawables(filter) {
+      const out = []
+      const core = state.stage?.core
+      if (!core) return out
+      for (let i = 0; i < core.getDrawableCount(); i++) {
+        let parent = -1
+        try { parent = core.getDrawableParentPartIndex(i) } catch { continue }
+        if (parent < 0) continue
+        let name = ''
+        try {
+          const pid = core.getPartId(parent).getString().s
+          name = state.caps.parts.find((p) => p.id === pid)?.name || ''
+        } catch {}
+        if (filter && !name.includes(filter)) continue
+        out.push({ i, part: name, op: Math.round((core.getDrawableOpacity(i) || 0) * 100) / 100 })
+      }
+      return out
+    },
+    leanState: () => {
+      const def = (state.caps?.expressions || []).find((x) => x.name === '前倾')
+      const keys = def ? Object.keys(def.params) : []
+      return {
+        def: def ? def.params : null,
+        active: !!state.layers?.hasExpression?.('前倾'),
+        values: keys.map((k) => [k, state.stage?.param.get(k), state.stage?.param.info(k)?.min, state.stage?.param.info(k)?.max]),
+      }
+    },
+    tryLean: () => toggleLean(),
+    cheekTest: (s) => state.facePinch?.test(s),
+    faceVerts: () => {
+      // 「脸」部件所有网格顶点的平均坐标（看变形是否真的动）
+      const core = state.stage.core
+      const im = state.stage.model.internalModel
+      let sx = 0, sy = 0, n2 = 0
+      const n = core.getDrawableCount()
+      for (let i = 0; i < n; i++) {
+        let parent = -1
+        try { parent = core.getDrawableParentPartIndex(i) } catch { continue }
+        if (parent < 0) continue
+        let name = ''
+        try { name = state.caps.parts.find((p) => p.id === core.getPartId(parent).getString().s)?.name || '' } catch {}
+        if (!/^脸$|^脸底$/.test(name)) continue
+        let v = null
+        try { v = im.getDrawableVertices(i) } catch { continue }
+        if (!v) continue
+        for (let k = 0; k < v.length; k += 2) { sx += v[k]; sy += v[k + 1]; n2++ }
+      }
+      return n2 ? { x: Math.round(sx / n2), y: Math.round(sy / n2), n: n2 } : null
+    },
+    regionAt: (x, y) => regionAtClient(x, y)?.name ?? null,
+    regionCenter: (name) => {
+      const r = state.store?.all?.find((x) => x.name === name)
+      if (!r || !r.points?.length) return null
+      const mx = r.points.reduce((s, p) => s + p[0], 0) / r.points.length
+      const my = r.points.reduce((s, p) => s + p[1], 0) / r.points.length
+      return state.viewport.modelToScreen(mx, my)
+    },
+    regionDebug: (x, y) => {
+      const p = state.viewport.clientToModel(x, y)
+      const rows = (state.store?.all || []).map((r) => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const [px, py] of r.points || []) {
+          if (px < minX) minX = px
+          if (px > maxX) maxX = px
+          if (py < minY) minY = py
+          if (py > maxY) maxY = py
+        }
+        return { name: r.name, z: r.z, minX: Math.round(minX), minY: Math.round(minY), maxX: Math.round(maxX), maxY: Math.round(maxY) }
+      })
+      return { model: { x: Math.round(p.x), y: Math.round(p.y) }, rows }
+    },
+    zoom: (z) => state.viewport.set({ zoom: z }),
+    pinchTest: (dx, dy) => { state.facePinch.grab(); state.facePinch.move(dx, dy) },
+    pinchReset: () => state.facePinch.release(),
+    mask: () => state.mask && { w: state.mask.w, h: state.mask.h, coverage: +state.mask.coverage.toFixed(4) },
+    /** 视口状态（缩放/偏移/实际像素缩放）—— 排查「窗口跟着角色」时的落点 */
+    view: () => (state.viewport ? { ...state.viewport.view, scale: state.stage?.model?.scale?.x ?? null } : null),
+    /** 真实轮廓在窗口里的包围盒（客户端像素）+ 相对窗口中心的偏移 dx/dy */
+    maskBox: () => {
+      const m = state.mask || refreshMask(true)
+      if (!m?.data) return null
+      let minX = m.w, maxX = -1, minY = m.h, maxY = -1
+      for (let y = 0; y < m.h; y++) {
+        for (let x = 0; x < m.w; x++) {
+          if (m.data[y * m.w + x] > 8) {
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+          }
+        }
+      }
+      if (maxX < 0) return null
+      const W = window.innerWidth
+      const H = window.innerHeight
+      const box = {
+        left: +((minX / m.w) * W).toFixed(1),
+        top: +((minY / m.h) * H).toFixed(1),
+        right: +(((maxX + 1) / m.w) * W).toFixed(1),
+        bottom: +(((maxY + 1) / m.h) * H).toFixed(1),
+      }
+      box.w = +(box.right - box.left).toFixed(1)
+      box.h = +(box.bottom - box.top).toFixed(1)
+      box.dx = +((box.left + box.right) / 2 - W / 2).toFixed(1)
+      box.dy = +((box.top + box.bottom) / 2 - H / 2).toFixed(1)
+      box.margin = { left: +box.left.toFixed(0), top: +box.top.toFixed(0), right: +(W - box.right).toFixed(0), bottom: +(H - box.bottom).toFixed(0) }
+      return box
+    },
+    state: () => ({ ignoring: state.ignoring, clickThrough: state.settings?.clickThrough, pointerDown: state.pointerDown }),
+  }
 }
 
 main()
