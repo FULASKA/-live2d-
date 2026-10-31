@@ -25,24 +25,29 @@ const REST = {
  * extras 是「头/身体」这类会跟 gaze 抢的参数，只在动作期间钉。
  */
 export const POSES = {
-  默认手: { extras: {} },
+  默认手: { official: true, extras: {} },
   // 竖手指切出来动画.motion3.json @1.25s
   竖手指: {
+    official: true,
     params: { Movement1: 0, Movement3: 1, Param40: 1, Param36: 0, Param39: 0.322, Param41: 0.702, Param42: 0 },
     extras: {},
   },
   // 默认手切举手.motion3.json @1.133s
   举手: {
+    official: true,
     params: { Movement2: 1, Param62: 0.034, Param59: 0.476, Param60: 0.86, Param61: 0.022 },
     extras: {},
   },
   // 狗尾草切换出来.motion3.json @1.233s
   狗尾草: {
+    official: true,
     params: { Movement1: 1, Param36: 0.04, Param39: 0.2, Param41: -0.732, Param42: 0 },
     extras: {},
   },
   // 被摸胯：手抬到胸前护住 + 往后缩（不是前倾！前倾=凑近，方向反了）+ 右转头但眼睛盯前方
+  // 这一条不是官方动作，是我们用「举手」+ 头/身体偏移拼出来的预设
   护胯: {
+    official: false,
     params: { Movement2: 1, Param62: 0.034, Param59: 0.476, Param60: 0.86, Param61: 0.022 },
     extras: {
       ParamAngleX: 16,        // 头往角色右侧偏一点（想躲）
@@ -54,6 +59,9 @@ export const POSES = {
     },
   },
 }
+
+/** 官方动作（对应模型自带 motion3 的落点）；其余是我们自己拼的预设 */
+export const OFFICIAL_POSES = ['默认手', '竖手指', '举手', '狗尾草']
 
 const smooth = (t) => t * t * (3 - 2 * t)
 

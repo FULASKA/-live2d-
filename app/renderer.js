@@ -16,7 +16,7 @@ import { createMouth } from '../src/stage/mouth.js'
 import { createIdleFaces } from '../src/stage/idle-faces.js'
 import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
-import { createPoses, POSES } from '../src/stage/poses.js'
+import { createPoses, POSES, OFFICIAL_POSES } from '../src/stage/poses.js'
 import { PHRASES } from '../src/stage/phrases.js'
 import { createBubble } from '../src/stage/bubble.js'
 import { createAgentLink } from '../src/stage/agent-link.js'
@@ -255,6 +255,8 @@ async function main() {
       corner: true,
       // 冒泡时动嘴：按字数估时长（约 145ms/字 + 起止），念完自动收
       onSpeak: (text) => {
+        // null = 气泡收起：闭嘴，回到呼吸的常态
+        if (text == null) { state.mouth?.stop?.(); return }
         const n = Array.from(String(text)).length
         const ms = Math.max(600, Math.min(4200, 160 + n * 145))
         state.mouth?.talk?.(ms)
@@ -480,6 +482,8 @@ async function bootStage() {
   let lastT = performance.now()
   let frameDt = 1000 / 60
   const motionState = { x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0 }
+  // 拖拽物理的身体位移（弹簧状态：rx/ry 当前偏移，vrx/vry 速度）
+  const dragShape = { rx: 0, ry: 0, vrx: 0, vry: 0 }
   const tickDt = () => {
     const now = performance.now()
     frameDt = Math.min(120, Math.max(1, now - lastT))
@@ -520,6 +524,19 @@ async function bootStage() {
     motionState.ay = motionState.ay * 0.6 + ay * 0.4
     state.life?.motion(motionState.ax, motionState.ay)
     state.capture?.motion(motionState.vx, motionState.vy)
+    // 拖拽物理演算：拖动速度 → 身体位移（弹簧跟随，松手有余震），
+    // 喂给 physics3 的 `ParamBodyAngleRX`（既入又出）→ 模型自带的头发/衣服/耳朵物理整条甩起来。
+    if (state.settings.dragPhysics !== false) {
+      const targetX = Math.max(-10, Math.min(10, -motionState.vx * 0.02))
+      const targetY = Math.max(-7, Math.min(7, -motionState.vy * 0.014))
+      // 弹簧-阻尼：stiffness 越大跟得越紧，damping 越大越快停
+      dragShape.vrx += ((targetX - dragShape.rx) * 70 - dragShape.vrx * 11) * dt
+      dragShape.vry += ((targetY - dragShape.ry) * 70 - dragShape.vry * 11) * dt
+      dragShape.rx += dragShape.vrx * dt
+      dragShape.ry += dragShape.vry * dt
+      state.poseBus?.add('ParamBodyAngleRX', dragShape.rx)
+      state.poseBus?.add('ParamBodyAngleRY', dragShape.ry)
+    }
   }
 
   // ① 物理之前：喂物理输入 + 摆姿势。
@@ -671,6 +688,19 @@ function applyMode(name) {
 function cycleMode() {
   const i = MODE_LIST.indexOf(modeName)
   return applyMode(MODE_LIST[(i + 1) % MODE_LIST.length])
+}
+
+/**
+ * 体型：模型用 `Clothes2` 参数切（默认体型 0 / 体型1 0.4 / 体型2 1）。
+ * 原包是三个表达式，这里改成连续拉条，设置里拖到哪里就是哪里。
+ */
+function applyBodyShape(v) {
+  const val = Math.max(0, Math.min(1, Number(v) || 0))
+  state.bodyShape = val
+  if (!state.layers) return val
+  try { state.layers.removeSource('body') } catch {}
+  try { state.layers.addExpression('体型', [{ Id: 'Clothes2', Value: val, Blend: 'Add' }], { source: 'body', fade: 0.25 }) } catch {}
+  return val
 }
 
 /** 触摸动作 → 台词档（tap / pet 分开；脚和腰的 pet 由「痒痒的」统一说话，这里不重复） */
@@ -1429,7 +1459,8 @@ async function stageRpc(op, payload) {
       regions: (state.store?.all || []).map((r) => r.name),
       exprs: (state.caps?.expressions || []).map((e) => e.name),
       reactions: reactionsSnapshot(),
-      poses: Object.keys(POSES),
+      poses: Object.keys(POSES).map((name) => ({ name, official: OFFICIAL_POSES.includes(name) })),
+      bodyShape: state.bodyShape ?? 0,
       active: {
         exprs: (state.layers?.inspect?.()?.layers || []).map((l) => l.name),
         pose: state.poses?.state?.()?.active ?? null,
@@ -1474,6 +1505,7 @@ async function stageRpc(op, payload) {
     }
     return { reactions: reactionsSnapshot() }
   }
+  if (op === 'body') return { bodyShape: applyBodyShape(payload?.value) }
   if (op === 'patchExport') return exportStagePatch()
   if (op === 'mode') return { mode: applyMode(payload?.name) }
   return null
@@ -1511,6 +1543,8 @@ function applySettings(next) {
   else if (bubbleOn && !state.bubble?.visible && state.bubble?.text) state.bubble.show()
   state.bubble?.setScale(bubbleScale())
   applyBorder(state.settings.border === true)
+  // 体型（Clothes2）跟设置走：0 默认 / 0.4 体型1 / 1 体型2
+  applyBodyShape(state.settings.bodyShape ?? 0)
 
   applyPassState(!!state.settings.clickThrough)
 }
@@ -1755,7 +1789,7 @@ function installProbes({ motionState } = {}) {
     capture: () => state.capture?.state?.() ?? null,
     // 清掉所有表情来源 + 收回姿势（QA 用，避免上一轮试的参数残留）
     exprClear() {
-      for (const s of ['bus', 'agent', 'idle-exp', 'probe', 'lean']) state.layers?.removeSource(s)
+      for (const s of ['bus', 'agent', 'idle-exp', 'probe', 'lean', 'manual', 'mode', 'body', 'pinch', 'crotch-face']) state.layers?.removeSource(s)
       state.poses?.release(0)
     },
     captureSet: (patch) => state.capture?.set(patch) ?? null,
@@ -1886,6 +1920,7 @@ function installProbes({ motionState } = {}) {
     gazeOpts: () => (state.gaze?.options ? { ...state.gaze.options } : null),
     /** 姿态总线的当前合成值（排查「写了没生效 / 谁盖了谁」时看这一份） */
     pose: () => state.poseBus?.snapshot?.() ?? null,
+    bus: () => state.poseBus?.snapshot?.() ?? null,
     /** 关掉伪面捕通道（排查「写了 ParamAngleX 头不动」时用） */
     captureOff(on = true) {
       state.capture?.set(on

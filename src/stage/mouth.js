@@ -72,7 +72,7 @@ export function createMouth({ param, options = {} } = {}) {
 
   /** 说话能量 0..1（每帧喂；不喂则自动衰减到 0） */
   function speak(v) { levelTarget = clamp(Number(v) || 0, 0, 1) }
-  function stop() { levelTarget = 0 }
+  function stop() { levelTarget = 0; talkUntil = 0 }
 
   // 「假装说话」：气泡出现时自己编一段能量包络（有音节、有停顿），不用外部喂音频
   let talkUntil = 0
@@ -87,11 +87,12 @@ export function createMouth({ param, options = {} } = {}) {
 
     // 气泡说话：用两段不同周期拼出「音节 + 换气停顿」，比匀速开合自然
     if (performance.now() < talkUntil) {
-      const syllable = Math.abs(Math.sin(t * 11.5)) * 0.55 + Math.abs(Math.sin(t * 23.1)) * 0.25
+      const syllable = Math.abs(Math.sin(t * 11.5)) * 0.5 + Math.abs(Math.sin(t * 23.1)) * 0.2
       const pause = Math.sin(t * 2.3) > 0.86            // 偶尔咽口气
-      levelTarget = pause ? 0.04 : clamp(0.35 + syllable, 0, 1)
-    } else if (levelTarget > 0.03 && !performance.now() < talkUntil) {
-      levelTarget = 0
+      // 别把嘴张得太狠：正常说话是「微张 + 变化」，张太大就丢了常态的脸
+      levelTarget = pause ? 0.03 : clamp(0.16 + syllable * 0.55, 0, 0.62)
+    } else if (levelTarget > 0) {
+      levelTarget = 0   // 气泡收起 / 说完：回到呼吸的常态嘴形
     }
 
     // 音量跟随：起音快、收音慢，像真人在说

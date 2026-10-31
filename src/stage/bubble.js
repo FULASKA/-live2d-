@@ -153,6 +153,8 @@ export function createBubble({ el, anchor, side = 'right', corner = false, onSpe
     hide() {
       visible = false
       el.classList.remove('on')
+      // 气泡收起来就闭嘴，别让嘴一直动
+      try { onSpeak?.(null) } catch {}
     },
     /** 说一句预设台词（key 见 phrases.js：thinking / working / waiting / success / error / head / hand …） */
     say(key, { ms = 0, owner = null } = {}) {

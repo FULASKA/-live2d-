@@ -64,6 +64,10 @@ function paint() {
   const padY = Number(settings.padY ?? 0.02)
   setRange('#pad-y', padY)
   $('#pad-y-readout').textContent = `${Math.round(padY * 100)}%`
+  const body = Number(settings.bodyShape ?? 0)
+  setRange('#body-shape', body)
+  $('#body-shape-readout').textContent = body <= 0.01 ? '默认' : body >= 0.99 ? '体型2' : '体型 ' + Math.round(body * 100) + '%'
+  setCheck('#drag-physics', settings.dragPhysics !== false)
   setCheck('#top', !!settings.alwaysOnTop)
   setCheck('#click-through', !!settings.clickThrough)
 }
@@ -122,6 +126,12 @@ function wire() {
     $('#pad-y-readout').textContent = `${Math.round(v * 100)}%`
     pushSettingsSoon({ padY: v })
   }
+  $('#body-shape').oninput = (e) => {
+    const v = Number(e.target.value)
+    $('#body-shape-readout').textContent = v <= 0.01 ? '默认' : v >= 0.99 ? '体型2' : '体型 ' + Math.round(v * 100) + '%'
+    pushSettingsSoon({ bodyShape: v })
+  }
+  $('#drag-physics').onchange = (e) => pushSettings({ dragPhysics: !!e.target.checked })
   $('#top').onchange = (e) => pushSettings({ alwaysOnTop: !!e.target.checked })
   $('#click-through').onchange = (e) => pushSettings({ clickThrough: !!e.target.checked })
 
@@ -159,7 +169,8 @@ async function loadModelLists() {
   const exprBox = $('#expr-list')
   if (exprBox && !exprBox.dataset.built) {
     exprBox.dataset.built = '1'
-    for (const name of meta.exprs || []) {
+    const skip = new Set(['体型1', '体型2', '默认体型']) // 体型改成拉条了，不再占按钮
+    for (const name of (meta.exprs || []).filter((n) => !skip.has(n))) {
       const btn = document.createElement('button')
       btn.className = 'chip'
       btn.textContent = name
@@ -173,21 +184,24 @@ async function loadModelLists() {
       exprBox.append(btn)
     }
   }
-  const poseBox = $('#pose-list')
-  if (poseBox && !poseBox.dataset.built) {
-    poseBox.dataset.built = '1'
-    for (const name of meta.poses || []) {
+  // 官方动作与我们的预设分两组显示（meta.poses 现在带 official 标记）
+  const poses = (meta.poses || []).map((p) => (typeof p === 'string' ? { name: p, official: true } : p))
+  for (const [boxSel, wantOfficial] of [['#pose-list', true], ['#pose-custom', false]]) {
+    const box = $(boxSel)
+    if (!box || box.dataset.built) continue
+    box.dataset.built = '1'
+    for (const p of poses.filter((x) => !!x.official === wantOfficial)) {
       const btn = document.createElement('button')
       btn.className = 'chip'
-      btn.textContent = name
-      btn.dataset.pose = name
+      btn.textContent = p.name
+      btn.dataset.pose = p.name
       btn.onclick = async () => {
-        const r = await rpc('pose', { name })
+        const r = await rpc('pose', { name: p.name })
         if (!r) return
-        activePose = r.active?.pose || name
+        activePose = r.active?.pose || p.name
         paintChips()
       }
-      poseBox.append(btn)
+      box.append(btn)
     }
   }
   paintChips()
