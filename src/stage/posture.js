@@ -18,12 +18,14 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 export function createPosture({ param, gaze, bus, options = {} } = {}) {
   const cfg = {
     strength: 1,
-    chest: 24,          // 胸满偏角度（度）
-    chestK: 3.4,        // 弹簧刚度（越大越快）
+    chest: 26,          // 胸满偏角度（度）
+    // 弹簧刚度：原来 3.4 的等效时间常数接近 1 秒，身体跟手像在水里。
+    // ω=√k，ζω≈0.72×6.7≈4.8 → 大约 0.2 秒到位，还保留一点过冲。
+    chestK: 45,
     chestRatio: 0.72,   // 阻尼比（<1 会过冲一点，像真的）
     hip: 11,            // 腰满偏角度
-    hipK: 1.5,
-    hipRatio: 0.95,
+    hipK: 12,
+    hipRatio: 0.9,
     roll: 0.28,         // 胸口侧倾 = -横向 × 这个比例
     bowBoost: 1.7,      // 低头时胸口多弯
     liftDamp: 0.75,     // 抬头时收敛
