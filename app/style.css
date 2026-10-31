@@ -83,6 +83,9 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
 #bubble::after { width: 7px; height: 7px; border-width: 2px; }
 #bubble[data-anchor="right"][data-side="above"]::before { left: 18px; bottom: -18px; }
 #bubble[data-anchor="right"][data-side="above"]::after { left: 9px; bottom: -32px; }
+/* 居中挂在头顶（两侧都放不下时）：点点放在正下方 */
+#bubble[data-anchor="center"]::before { left: 50%; margin-left: -6px; }
+#bubble[data-anchor="center"]::after { left: 50%; margin-left: -3.5px; }
 #bubble[data-anchor="left"][data-side="above"]::before { right: 18px; bottom: -18px; }
 #bubble[data-anchor="left"][data-side="above"]::after { right: 9px; bottom: -32px; }
 #bubble[data-side="below"]::before { top: -18px; }

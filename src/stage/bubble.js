@@ -79,12 +79,19 @@ export function createBubble({ el, anchor, side = 'right' }) {
     let x, y
     if (a) {
       const offset = Math.max(4, Math.round(w * 0.06))
-      if (side === 'right') {
-        x = a.right + offset
-        if (x + w > vp.w - 6) { side = 'left'; x = a.left - offset - w }
-      } else {
-        x = a.left - offset - w
-        if (x < 6) { side = 'right'; x = a.right + offset }
+      const gap = 6
+      const fitsRight = a.right + offset + w <= vp.w - gap
+      const fitsLeft = a.left - offset - w >= gap
+      // 先按设置里选的那一侧放；那一侧放不下再翻另一侧；两边都放不下面就居中挂在头顶。
+      // 窗口是「刚好包住角色」的，头侧往往真的没有气泡的宽度，居中兜底比硬贴边好看。
+      if (side === 'right' && fitsRight) x = a.right + offset
+      else if (side === 'left' && fitsLeft) x = a.left - offset - w
+      else if (fitsLeft) { side = 'left'; x = a.left - offset - w }
+      else if (fitsRight) { side = 'right'; x = a.right + offset }
+      else {
+        side = 'center'
+        // 气泡比窗口还宽时只能靠缩放，这里只保证不越界
+        x = (a.left + a.right) / 2 - w / 2
       }
       // 泡泡底边略高于头顶（留出点点尾巴的高度）
       y = a.top - h - 22
