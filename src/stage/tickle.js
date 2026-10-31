@@ -14,14 +14,19 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v)
 export function createTickle({ param, bus, life, onHold, options = {} } = {}) {
   const cfg = {
     ms: 2600,          // 一整段
-    hz: 4.2,           // 抖动频率
-    forearm: 0.34,     // 小臂摆动幅度（归一化）
-    forearmBase: 0.26, // 小臂抬起的基础量：被挠时手臂会不自觉抬一点
-    chest: 2.6,        // 胸腔快摆（度）
-    hip: 2.2,          // 盆骨快摆（度）
-    head: 2.4,         // 歪头跟着抖（度）
-    flapEvery: 0.28,   // 耳朵扑腾间隔（秒）
+    hz: 2.4,           // 晃动频率：整条身体左右「晃」，不是高频抖
+    forearm: 0.5,     // 小臂摆动幅度（归一化）
+    forearmBase: 0.3, // 小臂抬起的基础量：被挠时手臂会不自觉抬一点
+    chest: 4,        // 胸腔晃动（度）
+    hip: 5,          // 骨盆晃动（度）
+    legs: 10,         // 双腿跟着晃（度）——不然只有上半身在动，腿是钉住的
+    head: 4,         // 歪头跟着晃（度）
+    flapEvery: 0.5,    // 耳朵扑腾间隔（秒）
+    flapDur: 0.9,      // 单次耳朵扑棱时长（越长越慢）
     flapAmp: 0.75,
+    // 震荡衰减：damp = floor + (1-floor)*e^(-t*rate)
+    dampRate: 1.3,
+    dampFloor: 0.22,
     ...options,
   }
 
@@ -61,25 +66,28 @@ export function createTickle({ param, bus, life, onHold, options = {} } = {}) {
     const p = t / (cfg.ms / 1000)
     if (p >= 1) { stop(); return }
     // 钟形包络：起手第一下不至于硬起，收尾自然松开
-    const env = Math.sin(Math.PI * clamp(p, 0, 1))
-    const osc = Math.sin(t * Math.PI * 2 * cfg.hz)
+    const env = Math.min(1, Math.sin(Math.PI * clamp(p, 0, 1)) * 1.5)
+    // 震荡衰减：刚被挠到时抖得最猛，之后逐渐稳住（指数衰减，越到后面越自然）
+    const damp = cfg.dampFloor + (1 - cfg.dampFloor) * Math.exp(-t * cfg.dampRate)
+    const osc = Math.sin(t * Math.PI * 2 * cfg.hz) * damp
 
     // 两侧小臂反相摆（物理输出，绝对写）
     hold('LForearm', env * (cfg.forearmBase + cfg.forearm * osc))
     hold('RForearm', env * (cfg.forearmBase - cfg.forearm * osc))
-    // 盆骨：跟着抖（物理输出）
+    // 骨盆 / 胸腔 / 双腿：同一节奏左右晃（都是物理输出，绝对写；腿不写就会像钉在地上）
     hold('HipAngleZ', env * cfg.hip * -osc)
-    // 胸腔 / 歪头：加性走总线（物理输入，别覆盖）
-    add('ParamBodyAngleX2', env * cfg.chest * osc)
+    hold('ParamBodyAngleX2', env * cfg.chest * osc)
+    hold('LEGAngleZ2', env * cfg.legs * osc)
+    // 歪头：加性走总线（物理输入，别覆盖）
     add('ParamAngleZ', env * cfg.head * osc)
-    add('ParamBodyAngleZ', env * 1.6 * -osc)
+    add('ParamBodyAngleZ', env * 3 * -osc)
 
-    // 两只耳朵快速扑腾
+    // 两只耳朵跟着晃：间隔拉长、单次更慢（不是高频抖）
     nextFlap -= dt
     if (nextFlap <= 0) {
-      nextFlap = cfg.flapEvery
+      nextFlap = cfg.flapEvery * (1 + t * 0.45)
       flaps += 1
-      try { life?.flap?.(flaps % 2 ? 'B' : 'L', cfg.flapAmp, cfg.flapEvery * 0.9) } catch {}
+      try { life?.flap?.(flaps % 2 ? 'B' : 'L', cfg.flapAmp * damp, cfg.flapDur) } catch {}
     }
   }
 

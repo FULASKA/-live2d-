@@ -26,10 +26,12 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
     side: 1,             // 单边鼓脸比例
     wiggleHz: 3.2,
     wiggle: 0.25,
-    // 捏脸时耳朵快速扑棱 + 身体/尾巴快速小摆（「不舒服但不讨厌」的可爱感）
-    flapEvery: 0.16,
+    // 捏脸时耳朵扑棱 + 身体/腿左右晃动（「不舒服但不讨厌」的可爱感）
+    flapEvery: 0.3,
+    flapDur: 0.8,
     flapAmp: 0.75,
-    bodyWiggle: 2.2,
+    bodyWiggle: 3.2,
+    wobFreq: 0.7,        // 晃动频率系数（phase 本身按 wiggleHz 走，0.7 → 约 2.2Hz）
     pucker: 0.35,        // 被捏时撅嘴（加强「被捏住」的可读性）
     headTurn: 18,       // 拉满时头的额外偏转角度（@maxPull 像素）
     maxHeadTurn: 20,    // 上限
@@ -48,6 +50,7 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
   let phase = 0
   let flapT = 0
   let flapN = 0
+  let holdT = 0
   const writes = {}
   let testSide = null
   // 捏脸时头的跟随偏向（累积位移，松手回零）
@@ -129,6 +132,7 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
       return { mag: 1 }
     }
     const dt = Math.max(1, dtMs) / 1000
+    holdT = side ? holdT + dt : 0
     const k = 1 - Math.exp(-(side ? cfg.follow : cfg.releasePerSec) * dt)
     mag += (target - mag) * k
     if (!side && mag < 0.004) {
@@ -150,15 +154,18 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
     // 脸盘抖动 X< / X>：反向再叠一层，整张脸「被捏住还在挣扎」
     if (has('CheeksWiggleXR')) writeAbs('CheeksWiggleXR', -wiggleAmt)
     if (has('CheeksWiggleXL')) writeAbs('CheeksWiggleXL', wiggleAmt * 0.6)
-    // 耳朵快速扑棱 + 身体（连带尾巴）快速小摆：不舒服但不讨厌
+    // 耳朵扑棱 + 身体/腿（连带尾巴）左右晃：指数衰减，刚捏住那下最猛，之后逐步稳住
+    const damp = Math.exp(-holdT * 1.6)
     if (m > 0.12) {
       flapT -= dt
-      if (flapT <= 0) {
+      if (flapT <= 0 && holdT < 1.6) {
         flapT = cfg.flapEvery
         flapN += 1
-        try { life?.flap?.(flapN % 2 ? 'L' : 'R', cfg.flapAmp * Math.min(1, m * 2), cfg.flapEvery * 0.9) } catch {}
+        try { life?.flap?.(flapN % 2 ? 'L' : 'R', cfg.flapAmp * Math.min(1, m * 2) * damp, cfg.flapDur) } catch {}
       }
-      add('ParamBodyAngleZ', Math.sin(phase * 1.7) * cfg.bodyWiggle * m)
+      const wob = Math.sin(phase * cfg.wobFreq) * damp * m
+      add('ParamBodyAngleZ', wob * cfg.bodyWiggle)
+      add('LEGAngleZ2', wob * cfg.bodyWiggle * 1.8)
     }
     // 被捏住时撅一下嘴：脸的参数变化本来就弱，嘴一动「被捏住」立刻就成立了
     if (has('Mouthpucker')) add('Mouthpucker', m * cfg.pucker)
@@ -177,8 +184,8 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
   }
 
   /**
-   * 姿态部分（物理之前写）：捏脸时头跟着手转。
-   * 必须在 physics.evaluate 之前 —— 头一转，模型自带的头发/耳朵物理才会跟着甩。
+   * 姿态部分（物理之前写）：**不再推头**——头一转，鼓脸就被挡住看不见了。
+   * 只保留 push 的回落，留给以后要用「头被拽」的地方。
    */
   function applyPosture(dtMs = 1000 / 60) {
     const dt = clamp(dtMs / 1000, 0.001, 0.12)
@@ -188,16 +195,6 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
       push.y *= decay
       if (Math.abs(push.x) < 0.3) push.x = 0
       if (Math.abs(push.y) < 0.3) push.y = 0
-    }
-    if (push.x || push.y) {
-      const hz = clamp((push.x / cfg.maxPull) * cfg.headTurn, -cfg.maxHeadTurn, cfg.maxHeadTurn)
-      const hy = clamp((push.y / cfg.maxPull) * cfg.headTurn * 0.7, -cfg.maxHeadTurn, cfg.maxHeadTurn)
-      add('ParamAngleZ', hz)
-      add('ParamAngleY', -hy)
-      // 捏脸也朝手的方向转脸：只歪不转的话，脸被拽住会像贴片。
-      // 系数比歪头大：捏拉通常只有几十像素，按 hz 原样写太小（60px 只有 4°）。
-      add('ParamAngleX', hz * 2.2)
-      add('ParamBodyAngleZ', hz * 0.3)
     }
   }
 

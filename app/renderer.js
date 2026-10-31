@@ -578,6 +578,8 @@ async function bootStage() {
   const lookFromClient = (cx, cy) => {
     // agent 正在指定视线（look 动作）时不抢镜，hold 到期自动交还鼠标
     if (performance.now() < (state.agentLookUntil || 0)) return
+    // 捏脸时保持正脸：视线不再跟着鼠标转，否则鼓脸会转到侧面看不见
+    if (state.facePinch?.state?.()?.side) return
     const r = stage.canvas.getBoundingClientRect()
     const sw = stage.app.screen.width, sh = stage.app.screen.height
     const dpr = sw / Math.max(1, r.width)
@@ -849,6 +851,8 @@ function bootRegions() {
       if (name === '左脸' || name === '右脸') {
         if (ev.type === 'down') {
           state.facePinch?.grab(name === '右脸' ? 'R' : 'L')
+          // 正脸：视线回中，鼓脸才看得见
+          state.gaze?.setTarget?.(0, 0)
           pinchExpressions(true)
         } else if (ev.type === 'dragMove') {
           // ev.dx/dy 是模型坐标，换成客户端像素再交给捏脸层（maxPull 是按像素定的）
