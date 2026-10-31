@@ -12,6 +12,12 @@ import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
+// 控制台管道断开时（从终端/脚本启动后终端关闭）console.log 会抛 EPIPE，
+// 不接住会弹「A JavaScript error occurred in the main process」并崩溃。
+for (const s of [process.stdout, process.stderr]) {
+  try { s.on('error', (e) => { if (e && e.code === 'EPIPE') return }) } catch {}
+}
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // 便携/测试：STAGE_HOME 覆盖用户数据目录（设置文件跟着走，可做干净环境）
 if (process.env.STAGE_HOME) { try { mkdirSync(process.env.STAGE_HOME, { recursive: true }); app.setPath('userData', process.env.STAGE_HOME) } catch {} }
