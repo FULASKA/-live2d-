@@ -111,8 +111,10 @@ export function createBubble({ el, anchor, side = 'right', corner = false }) {
     el.style.left = `${Math.round(x)}px`
     el.style.top = `${Math.round(y)}px`
     el.dataset.anchor = corner ? 'center' : side
-    // 尾巴点点的方向：泡泡在头顶上方 → 点点朝下；挂在头侧 → 也朝下（都是低点更高）
-    el.dataset.side = a && !corner && y + h + 2 <= a.top ? 'above' : 'below'
+    // 尾巴点点的方向：点点要指向角色。
+    //   贴角模式：气泡在窗口顶部、角色在下面 → 点点朝下（above = 点点在气泡底边外侧）
+    //   跟随模式：按气泡在头顶上方还是下方决定
+    el.dataset.side = (corner || (a && y + h + 2 <= a.top)) ? 'above' : 'below'
   }
 
   return {
