@@ -1,0 +1,64 @@
+/* 动作编辑器：左（动作列表）｜中（预览 + 时间轴）｜右（参数） */
+:root {
+  --bg: #0f131b;
+  --panel: #161c27;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #dbe6f6;
+  --dim: #8798b0;
+  --accent: #5b9dff;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 12px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; overflow: hidden; }
+body { display: grid; grid-template-columns: 210px 1fr 260px; }
+
+aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#right { border-right: 0; border-left: 1px solid var(--line); }
+aside header { padding: 10px 12px; font-weight: 600; font-size: 12px; color: var(--dim); border-bottom: 1px solid var(--line); letter-spacing: .05em; }
+.row { display: flex; gap: 6px; padding: 8px 10px; align-items: center; flex-wrap: wrap; }
+button, select {
+  background: #1d2634; color: var(--text); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 9px; font: inherit; cursor: pointer;
+}
+button:hover, select:hover { border-color: var(--accent); }
+button.primary { background: #24405f; border-color: #3c6ea8; }
+input[type=range] { accent-color: var(--accent); }
+input[type=text], input[placeholder], input[type=number] {
+  background: #121824; color: var(--text); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 8px; font: inherit; width: 100%;
+}
+.hint { padding: 6px 10px 10px; color: var(--dim); font-size: 11px; line-height: 1.5; }
+
+ul { list-style: none; margin: 0; padding: 4px; overflow: auto; flex: 1; min-height: 0; }
+#act-list li { padding: 7px 9px; border-radius: 7px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
+#act-list li:hover { background: rgba(255,255,255,.04); }
+#act-list li.on { background: rgba(91,157,255,.18); }
+#act-list li small { color: var(--dim); font-size: 10px; }
+
+#mid { display: flex; flex-direction: column; min-width: 0; }
+#preview { flex: 1; position: relative; background:
+  repeating-conic-gradient(#141a24 0% 25%, #111722 0% 50%) 50% / 24px 24px; overflow: hidden; }
+#preview canvas { display: block; width: 100%; height: 100%; }
+
+#timeline { border-top: 1px solid var(--line); background: var(--panel); padding-bottom: 8px; }
+#timeline .row { padding: 8px 12px 4px; }
+#time-readout { color: var(--dim); margin-left: auto; font-variant-numeric: tabular-nums; }
+#time { width: calc(100% - 24px); margin: 6px 12px; }
+#keys { display: flex; gap: 6px; padding: 4px 12px; overflow-x: auto; min-height: 34px; }
+#keys button { padding: 3px 8px; font-size: 11px; }
+#keys button.on { background: #24405f; border-color: #3c6ea8; }
+
+#param-active { padding: 0 10px 6px; display: flex; flex-direction: column; gap: 6px; overflow: auto; max-height: 46%; }
+.pa { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; }
+.pa .top { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; }
+.pa .top b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pa .top i { color: var(--dim); font-style: normal; font-variant-numeric: tabular-nums; }
+.pa .bar { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.pa .bar button { padding: 0 5px; font-size: 11px; }
+.pa input[type=range] { flex: 1; }
+
+#param-list { flex: 1; }
+#param-list li { padding: 4px 8px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+#param-list li:hover { background: rgba(255,255,255,.05); }
+#param-list li small { color: var(--dim); }
+#param-list li.on { color: var(--accent); }

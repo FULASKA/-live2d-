@@ -224,6 +224,37 @@ function wireIpc() {
     const [x, y] = win.getPosition()
     win.setPosition(Math.round(x + dx), Math.round(y + dy))
   })
+  // ---------- 动作编辑器：存 / 读动作 JSON + 打开编辑窗口 ----------
+  const actionsFile = () => path.join(app.getPath('userData'), 'actions.json')
+  ipcMain.handle('actions:save', async (_e, data) => {
+    try {
+      await mkdir(path.dirname(actionsFile()), { recursive: true })
+      await writeFile(actionsFile(), JSON.stringify(data, null, 2))
+      return { ok: true, file: actionsFile() }
+    } catch (e) { return { ok: false, error: String(e?.message || e) } }
+  })
+  ipcMain.handle('actions:load', async () => {
+    try { return JSON.parse(await readFile(actionsFile(), 'utf8')) } catch { return null }
+  })
+  let editorWin = null
+  ipcMain.on('shell:editor', () => {
+    if (editorWin && !editorWin.isDestroyed()) { editorWin.focus(); return }
+    editorWin = new BrowserWindow({
+      width: 1240, height: 840, minWidth: 900, minHeight: 620,
+      title: '动作编辑器 · Live2D Stage',
+      backgroundColor: '#0f131b',
+      autoHideMenuBar: true,
+      webPreferences: {
+        preload: path.join(ROOT, 'app', 'preload.cjs'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        // 被别的窗口挡住也不能停帧：预览要一直能播
+        backgroundThrottling: false,
+      },
+    })
+    editorWin.loadURL(`${srv.url}/app/editor.html`)
+    editorWin.on('closed', () => { editorWin = null })
+  })
   // ---------- 动作录制：存 / 列 / 读 ----------
   // 录到的数据是「每帧参数 + 标记」，放 userData/recordings 里，跟应用一起搬走
   const recDir = () => path.join(app.getPath('userData'), 'recordings')

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>动作编辑器 · Live2D Stage</title>
+<link rel="stylesheet" href="./editor.css">
+<script type="importmap">
+{ "imports": {
+  "pixi.js": "/vendor8/pixi.js/dist/pixi.mjs",
+  "untitled-pixi-live2d-engine/cubism": "/vendor8/untitled-pixi-live2d-engine/dist/cubism.es.js",
+  "@pixi/sound": "/vendor8/@pixi/sound/lib/index.mjs"
+} }
+</script>
+</head>
+<body>
+  <aside id="left">
+    <header>动作</header>
+    <div class="row">
+      <button id="act-new">新建</button>
+      <button id="act-dup">复制</button>
+      <button id="act-del">删除</button>
+    </div>
+    <ul id="act-list"></ul>
+    <div class="row">
+      <button id="act-export">导出 JSON</button>
+      <label class="file">导入<input type="file" id="act-import" accept=".json"></label>
+    </div>
+    <div class="hint">存成 userData/actions.json；触发条件先记着，后面接舞台</div>
+  </aside>
+
+  <main id="mid">
+    <div id="preview"></div>
+    <div id="timeline">
+      <div class="row">
+        <button id="play">▶ 播放</button>
+        <button id="add-key">＋ 关键帧</button>
+        <button id="del-key">删除关键帧</button>
+        <span id="time-readout">0 / 0 ms</span>
+      </div>
+      <input type="range" id="time" min="0" max="1200" step="10" value="0">
+      <div id="keys"></div>
+    </div>
+  </main>
+
+  <aside id="right">
+    <header>参数</header>
+    <div class="row">
+      <input id="param-search" placeholder="搜参数名 / Id">
+      <button id="add-param">＋</button>
+    </div>
+    <div id="param-active"></div>
+    <div class="hint">选中的参数会出现在上方；滑块改的是「当前关键帧」的值</div>
+    <ul id="param-list"></ul>
+  </aside>
+
+  <script type="module" src="./editor.js"></script>
+</body>
+</html>

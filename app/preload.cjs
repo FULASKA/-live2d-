@@ -25,4 +25,8 @@ contextBridge.exposeInMainWorld('shell', {
   recSave: (name, data) => ipcRenderer.invoke('rec:save', name, data),
   recList: () => ipcRenderer.invoke('rec:list'),
   recLoad: (name) => ipcRenderer.invoke('rec:load', name),
+  // 动作编辑器：动作 JSON 存取 + 打开编辑窗口
+  actionsSave: (data) => ipcRenderer.invoke('actions:save', data),
+  actionsLoad: () => ipcRenderer.invoke('actions:load'),
+  openEditor: () => ipcRenderer.send('shell:editor'),
 })

@@ -1380,6 +1380,7 @@ function bindPanel() {
   }
 
   // ---- 动作录制：开始 / 停止并存 / 列表 / 回放 ----
+  $('#open-editor') && ($('#open-editor').onclick = () => shell.openEditor?.())
   const recBtn = $('#rec-start')
   const recSel = $('#rec-list')
   let recOn = false
