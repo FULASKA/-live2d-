@@ -36,6 +36,8 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
   }
 
   function setExpressions(names) {
+    // 用户互动表情（reaction / switch）在场时让位：两边都写 key3/5/6 会叠出怪眼型
+    if (layers?.hasSource?.('reaction') || layers?.hasSource?.('switch')) return
     clearExpression()
     for (const name of [].concat(names || [])) {
       const def = defOf(name)
@@ -94,8 +96,16 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
     }
   }
 
+  /** 互动表情撤掉后，把当前状态的表情接回来（不重播气泡） */
+  function reapply() {
+    if (!enabled) return
+    if (!lastState || lastState === '__init__') return
+    setExpressions(EXPRS_OF[lastState] ?? EXPR_OF[lastState] ?? null)
+  }
+
   return {
     apply,
+    reapply,
     /** 外部指令接管气泡时，把状态联动的「几秒后自动收起」取消掉 */
     cancelHide() { clearTimeout(hideTimer) },
     /** 关掉联动（设置里可做开关；关掉后不再动表情，气泡也不弹） */

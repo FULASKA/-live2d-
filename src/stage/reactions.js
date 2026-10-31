@@ -34,6 +34,8 @@ export function createReactions({
   reactionSource = 'reaction',
   ttlMs = 6000,
   fade = 0.3,
+  /** 临时反应撤掉后通知外面（让状态表情回来），避免和 agent 层叠成花脸 */
+  onClear = null,
   /** 允许按区域名覆盖默认反应（应用里可做用户配置） */
   reactions = null,
 } = {}) {
@@ -44,6 +46,8 @@ export function createReactions({
   function addExpression(name, source) {
     const def = defOf(name)
     if (!def) { onEvent({ type: 'warn', text: `没有表情：${name}` }); return false }
+    // 用户互动表情优先：先摘掉 DSH 状态表情（屑屑眼等），否则两边都写 key3/5/6 会叠出怪眼型
+    layers.removeSource('agent')
     const ok = layers.addExpression(name, def.params, { fade, source })
     if (ok) onEvent({ type: 'added', name, source })
     return ok
@@ -55,6 +59,8 @@ export function createReactions({
     const removed = layers.removeSource(reactionSource)
     active.group = null
     if (removed.length) onEvent({ type: 'removed', names: removed, reason })
+    // 互动结束：把当前 DSH 状态的表情接回来
+    try { onClear?.() } catch {}
   }
 
   function apply(region, kind) {
@@ -68,8 +74,10 @@ export function createReactions({
     // 切换型：独立层，长期保持；只有再点同一个热区才收回
     if (rx.toggle) {
       const on = layers.hasExpression(rx.toggle)
-      if (on) layers.removeExpression(rx.toggle)
-      else addExpression(rx.toggle, switchSource)
+      if (on) {
+        layers.removeExpression(rx.toggle)
+        try { onClear?.() } catch {}
+      } else addExpression(rx.toggle, switchSource)
       onEvent({ type: on ? 'removed' : 'added', names: on ? [rx.toggle] : undefined, name: on ? undefined : rx.toggle, source: switchSource, reason: on ? '切换关' : undefined, persist: true })
       if (active.group) clear('切换互动')
       active.group = null

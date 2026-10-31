@@ -363,6 +363,7 @@ async function bootStage() {
     layers: state.layers,
     expressionDefs: state.caps.expressions,
     onEvent: (e) => { if (e.type === 'warn') console.warn('[reaction]', e.text) },
+    onClear: () => state.agentLink?.reapply?.(),
   })
 
   // 姿态总线：头/身角度的唯一写入者（物理前后各写一次，各层只累加）
@@ -441,6 +442,11 @@ async function bootStage() {
       if (r.pose) state.poses?.release(420)
       if (r.exprs?.length) state.layers?.removeSource('idle-exp')
       if (r.mouth) state.mouth?.clearMood()
+    },
+    // 物理输出参数（左臂 Z 等）用 hold 写绝对值；null = 释放
+    onHold: (id, v) => {
+      if (v == null) state.layers?.release(id)
+      else state.layers?.hold(id, v)
     },
     // 小台词用气泡；正在显示 DSH 状态（thinking/working/…）时不抢话
     onLine: (text, ms = 4200) => {

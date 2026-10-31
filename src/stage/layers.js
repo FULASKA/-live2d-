@@ -80,6 +80,7 @@ export function createLayerStack({ param, part, isPhysicsInput = () => false } =
       return n
     },
     hasExpression: (name) => exprLayers.some((l) => l.name === name),
+    hasSource: (source) => exprLayers.some((l) => l.source === source),
     expressions: () => exprLayers.map((l) => l.name),
     /** 单层的调试信息（t0 = 加入时的帧号，用来确认「有没有被重置重播」） */
     entry(name) {

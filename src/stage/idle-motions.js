@@ -127,7 +127,7 @@ const ROUTINES = {
     pose: '竖手指',
     mouth: { smile: 0.3, open: 0.1 },
     tracks: {
-      Param44: [[0, 0], [0.1, -0.9], [0.24, 0.7], [0.36, -0.9], [0.48, 0.7], [0.6, -0.8], [0.72, 0.5], [0.86, 0], [1, 0]],
+      // 头/身体/眉：跟视线、姿态在一条线上，走加性总线
       ParamBrowLY: [[0, 0], [0.06, 0.5], [0.14, -0.1], [0.22, 0.55], [0.3, -0.1], [0.38, 0.6], [0.46, -0.05], [0.56, 0.5], [0.7, 0], [1, 0]],
       ParamBrowRY: [[0, 0], [0.06, 0.45], [0.14, -0.1], [0.22, 0.5], [0.3, -0.1], [0.38, 0.55], [0.46, -0.05], [0.56, 0.45], [0.7, 0], [1, 0]],
       ParamAngleX: [[0, 0], [0.2, 4], [0.6, 5], [1, 0]],
@@ -135,6 +135,16 @@ const ROUTINES = {
       ParamAngleZ: [[0, 0], [0.2, -3], [0.55, 3], [1, 0]],
       ParamBodyAngleX: [[0, 0], [0.2, 3], [1, 0]],
       ParamEyeBallX: [[0, 0], [0.2, 0.15], [0.7, 0.2], [1, 0]],
+    },
+    // 物理输出：必须用 hold 写绝对值，否则会被物理回算吃掉（摆动会变得很弱）
+    holds: {
+      // 左臂 Z 摆满量程；小臂/大臂跟着慢半拍，手腕角度自然翻一下
+      Param44: [[0, 0], [0.1, -1], [0.24, 0.95], [0.36, -1], [0.48, 0.95], [0.6, -0.9], [0.72, 0.6], [0.86, 0], [1, 0]],
+      LForearm: [[0, 0], [0.16, -0.22], [0.3, 0.2], [0.42, -0.22], [0.54, 0.2], [0.66, -0.18], [0.78, 0.12], [0.9, 0], [1, 0]],
+      LArm: [[0, 0], [0.18, 0.12], [0.34, -0.1], [0.5, 0.1], [0.66, -0.08], [0.82, 0], [1, 0]],
+      ShoulderZ: [[0, 0], [0.2, 2.6], [0.55, -2.2], [0.85, 0], [1, 0]],
+      ShoulderY: [[0, 0], [0.24, -1.4], [0.6, 1.2], [0.9, 0], [1, 0]],
+      HipAngleZ: [[0, 0], [0.2, 1.8], [0.6, -1.5], [1, 0]],
     },
   },
   // 戴铁盆：钢盆表情 + 摇头晃脑（左摇右晃，带一点身体跟随）
@@ -152,7 +162,7 @@ const ROUTINES = {
   },
 }
 
-export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart, onFinish, options = {} } = {}) {
+export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart, onFinish, onHold, options = {} } = {}) {
   const cfg = {
     enabled: true,
     speed: 1,           // 设置里的「待机频率」倍数：越大换动作越勤
@@ -176,6 +186,12 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart
   let last = null
   let plays = 0
   let pausedUntil = 0
+  // 需要「钉住」的参数（物理输出也能压住）：每帧写绝对值，动作结束/让位时释放
+  const heldIds = new Set()
+  function releaseHolds() {
+    for (const id of heldIds) { try { onHold?.(id, null) } catch {} }
+    heldIds.clear()
+  }
 
   /** 用户一互动就让位：互动期间不换新动作，正在播的也快速收尾 */
   function pause(ms = 1500) {
@@ -249,9 +265,15 @@ export function createIdleMotions({ bus, param, life, idleFaces, onLine, onStart
           const fadeOut = clamp((cur.ms - cur.t) / (cfg.fade * 1000), 0, 1)
           const k = Math.min(fadeIn, fadeOut)
           for (const [id, keys] of Object.entries(cur.r.tracks)) add(id, sample(keys, p) * k)
+          // 物理输出（左臂Z 等）走 hold：绝对值直接写，否则会被物理回算吃掉
+          for (const [id, keys] of Object.entries(cur.r.holds || {})) {
+            try { onHold?.(id, sample(keys, p) * k) } catch {}
+            heldIds.add(id)
+          }
         }
       }
     }
+    if (paused || !cur) releaseHolds()
   }
 
   return {
