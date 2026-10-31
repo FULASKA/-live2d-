@@ -24,8 +24,8 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
     releasePerSec: 4.5,  // 松手回落速度
     puff: 1,             // 整体鼓脸比例（按参数量程）
     side: 1,             // 单边鼓脸比例
-    wiggleHz: 3.2,
-    wiggle: 0.25,
+    wiggleHz: 3.6,
+    wiggle: 0.32,
     // 捏脸时耳朵扑棱 + 身体/腿左右晃动（「不舒服但不讨厌」的可爱感）
     flapEvery: 0.3,
     flapDur: 0.8,
@@ -44,6 +44,7 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
   }
 
   let side = null      // 'L' | 'R' | null
+  let anchor = null    // 按下点的累积位移（跟随鼠标用）
   let pulled = 0       // 累计拉扯量（像素）
   let mag = 0          // 归一化 0..1（平滑后）
   let target = 0
@@ -89,15 +90,22 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
     side = which === 'R' ? 'R' : 'L'
     pulled = 0
     target = 0
+    anchor = { x: 0, y: 0 }
   }
-  /** 拖动像素：只累加位移量（方向不再决定左右，左右由按哪边决定） */
+  /**
+   * 跟随鼠标：力度 = 光标相对「按下点」拉开的距离。
+   * 往哪拖就鼓多大，拖回去会跟着变小 —— 不是把每次位移累加起来的单向拉扯。
+   */
   function move(dx, dy) {
     if (!side) return
-    pulled += Math.hypot(dx, dy)
+    if (!anchor) anchor = { x: 0, y: 0 }
+    const lim = cfg.maxPull * 1.6
+    anchor.x = clamp(anchor.x + dx, -lim, lim)
+    anchor.y = clamp(anchor.y + dy, -lim, lim)
+    pulled = Math.hypot(anchor.x, anchor.y)
     target = Math.pow(clamp(pulled / cfg.maxPull, 0, 1), cfg.curvePow)
-    // 头跟着手走：累积带方向的位移，apply 里换成角度
-    push.x = clamp(push.x + dx, -cfg.maxPull * 2, cfg.maxPull * 2)
-    push.y = clamp(push.y + dy, -cfg.maxPull * 2, cfg.maxPull * 2)
+    push.x = anchor.x
+    push.y = anchor.y
   }
   function release() {
     side = null
@@ -105,6 +113,7 @@ export function createFacePinch({ param, bus, life, options = {} } = {}) {
     target = 0
     push.x = 0
     push.y = 0
+    anchor = null
   }
 
   /**
