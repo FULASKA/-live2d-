@@ -19,7 +19,7 @@ const EXPR_OF = {
 
 const HIDE_AFTER_MS = { success: 4600, error: 6000, result: 2200 }
 
-export function createAgentLink({ bubble, layers, expressions = [], poses, life } = {}) {
+export function createAgentLink({ bubble, layers, expressions = [], poses, life, onState } = {}) {
   let lastState = '__init__'
   let lastAt = 0
   let hideTimer = 0
@@ -60,9 +60,11 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life 
     if (!state) {
       clearExpression()
       scheduleHide(1200)
+      try { onState?.(null) } catch {}
       return
     }
 
+    try { onState?.(state) } catch {}
     setExpression(EXPR_OF[state] || null)
     bubble?.say(state)
     // 状态一变，耳朵扑棱一下（小动作，不抢气泡）

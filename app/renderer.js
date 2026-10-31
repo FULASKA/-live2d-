@@ -14,6 +14,7 @@ import { createIdleFaces } from '../src/stage/idle-faces.js'
 import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
 import { createPoses } from '../src/stage/poses.js'
+import { createRecorder } from '../src/stage/recorder.js'
 import { createBubble } from '../src/stage/bubble.js'
 import { createAgentLink } from '../src/stage/agent-link.js'
 import { createProfiler } from '../src/stage/perf.js'
@@ -121,6 +122,8 @@ async function main() {
       expressions: state.caps.expressions || [],
       poses: state.poses,
       life: state.life,
+      // 状态变化打进录制标记，回放时能对齐「这一句是 success 时说的」
+      onState: (st) => state.recorder?.mark(`agent:${st ?? 'idle'}`),
     })
     shell.onAgentStatus?.((snap) => state.agentLink?.apply(snap))
     bindPanel()
@@ -217,6 +220,12 @@ async function bootStage() {
   state.idleFaces = createIdleFaces({ param: stage.param })
   // 终点姿势：举手 / 竖手指 / 狗尾草（数值取自模型自带的 motion3 末帧），过渡自己补
   state.poses = createPoses({ layers: state.layers })
+  // 动作录制：每帧采参数快照（物理之后、update 之前），带标记，存 JSON 回放对照
+  state.recorder = createRecorder({
+    param: stage.param,
+    layers: state.layers,
+    isPhysicsOutput: (id) => state.physics.outputs.has(id),
+  })
 
   let lastT = performance.now()
   let frameDt = 1000 / 60
@@ -295,6 +304,8 @@ async function bootStage() {
       state.life?.apply(frameDt)
       state.facePinch?.apply(frameDt)
     })
+    // 采样/回放都在这一刻：各层写完、物理算完，读到的才是这一帧真正的值
+    state.recorder?.sample(performance.now())
   })
 
   // ---------- 标定探针（开发期用：单参数覆写 / 物理读回采样） ----------
@@ -375,6 +386,23 @@ async function bootStage() {
     /** 模拟一条 DSH 状态（不接插件时也能验证联动） */
     agent(snap) { state.agentLink?.apply(snap) },
     agentState: () => state.agentLink?.state() ?? null,
+    // ---- 动作录制 ----
+    recStart(opts) { return state.recorder?.start(opts) ?? null },
+    async recStop(name = 'take') {
+      const data = state.recorder?.stop()
+      if (!data) return null
+      data.name = name
+      const r = await shell.recSave?.(name, data)
+      return { frames: data.frames.length, duration: data.duration, marks: data.marks.length, file: r?.file ?? null }
+    },
+    recMark(label) { return state.recorder?.mark(label) ?? false },
+    recList: () => shell.recList?.() ?? [],
+    async recPlay(name, opts) {
+      const data = await shell.recLoad?.(name)
+      return state.recorder?.play(data, opts) ?? false
+    },
+    recStopPlay() { return state.recorder?.stopPlay() ?? false },
+    recState: () => state.recorder?.state() ?? null,
     /** 读一个像素的 RGBA（判断眼睛有没有闭：虹膜是蓝的，闭眼是皮肤色） */
     pixel: (x, y) => state.stage?.sampleAlpha?.(x, y) ?? null,
     mouth: () => state.mouth?.state() ?? null,
@@ -649,6 +677,10 @@ function bootRegions() {
     onEvent: (ev) => {
       const name = ev.region?.name
       const isHand = name === '左手' || name === '右手'
+      // 互动也打进录制标记（tap / pet 第一步），回放时能对上动作
+      if (name && ((ev.type === 'tap') || (ev.type === 'pet' && ev.step === 1))) {
+        state.recorder?.mark(`${ev.type}:${name}`)
+      }
       // 点手 = 竖手指（抬起/放下），不再走表情反应；摸手还是 ＞＜ + 脸红
       if (ev.type === 'tap' && isHand) {
         const next = state.poses?.toggle('竖手指')
@@ -1346,6 +1378,48 @@ function bindPanel() {
       state.bubble?.setSide(side)
     }
   }
+
+  // ---- 动作录制：开始 / 停止并存 / 列表 / 回放 ----
+  const recBtn = $('#rec-start')
+  const recSel = $('#rec-list')
+  let recOn = false
+  const refreshRecList = async () => {
+    if (!recSel) return
+    const list = (await shell.recList?.()) || []
+    recSel.innerHTML = list.map((n) => `<option>${n}</option>`).join('') || '<option value="">（还没有录制）</option>'
+  }
+  refreshRecList()
+  if (recBtn) {
+    recBtn.onclick = async () => {
+      if (!recOn) {
+        state.recorder?.start()
+        recOn = true
+        recBtn.textContent = '停止并保存'
+        toast('录制中…')
+      } else {
+        const data = state.recorder?.stop()
+        recOn = false
+        recBtn.textContent = '开始录制'
+        if (!data) { toast('没录到内容'); return }
+        const name = `take-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`
+        data.name = name
+        const r = await shell.recSave?.(name, data)
+        toast(r?.ok ? `已保存 ${name}` : '保存失败')
+        await refreshRecList()
+        if (recSel) recSel.value = name
+      }
+    }
+  }
+  $('#rec-refresh') && ($('#rec-refresh').onclick = () => refreshRecList())
+  $('#rec-play') && ($('#rec-play').onclick = async () => {
+    const name = recSel?.value
+    if (!name) { toast('先选一条录制'); return }
+    const data = await shell.recLoad?.(name)
+    if (!data) { toast('读不到这条录制'); return }
+    state.recorder?.play(data)
+    toast(`回放 ${name}`)
+  })
+  $('#rec-stop-play') && ($('#rec-stop-play').onclick = () => { state.recorder?.stopPlay(); toast('已停止回放') })
 
   $('#win-center').onclick = () => shell.center()
 

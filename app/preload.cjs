@@ -21,4 +21,8 @@ contextBridge.exposeInMainWorld('shell', {
   onCursor: (fn) => ipcRenderer.on('cursor:pos', (_e, p) => fn(p)),
   // DSH 工作状态（主进程轮询状态文件后推过来）：{ state, task, tool, at }
   onAgentStatus: (fn) => ipcRenderer.on('agent:status', (_e, s) => fn(s)),
+  // 动作录制：存 / 列 / 读（JSON 在 userData/recordings）
+  recSave: (name, data) => ipcRenderer.invoke('rec:save', name, data),
+  recList: () => ipcRenderer.invoke('rec:list'),
+  recLoad: (name) => ipcRenderer.invoke('rec:load', name),
 })

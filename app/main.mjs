@@ -224,6 +224,32 @@ function wireIpc() {
     const [x, y] = win.getPosition()
     win.setPosition(Math.round(x + dx), Math.round(y + dy))
   })
+  // ---------- 动作录制：存 / 列 / 读 ----------
+  // 录到的数据是「每帧参数 + 标记」，放 userData/recordings 里，跟应用一起搬走
+  const recDir = () => path.join(app.getPath('userData'), 'recordings')
+  const safeName = (name) => String(name || 'take').replace(/[^\w\u4e00-\u9fa5.-]+/g, '_').slice(0, 60)
+  ipcMain.handle('rec:save', async (_e, name, data) => {
+    try {
+      await mkdir(recDir(), { recursive: true })
+      const file = path.join(recDir(), `${safeName(name)}.json`)
+      await writeFile(file, JSON.stringify(data))
+      return { ok: true, file }
+    } catch (e) { return { ok: false, error: String(e?.message || e) } }
+  })
+  ipcMain.handle('rec:list', async () => {
+    try {
+      const { readdir } = await import('node:fs/promises')
+      await mkdir(recDir(), { recursive: true })
+      const files = (await readdir(recDir())).filter((f) => f.endsWith('.json'))
+      return files.map((f) => f.replace(/\.json$/, ''))
+    } catch { return [] }
+  })
+  ipcMain.handle('rec:load', async (_e, name) => {
+    try {
+      const file = path.join(recDir(), `${safeName(name)}.json`)
+      return JSON.parse(await readFile(file, 'utf8'))
+    } catch { return null }
+  })
   ipcMain.on('win:center', () => {
     if (!win) return
     const { workArea } = screen.getPrimaryDisplay()
