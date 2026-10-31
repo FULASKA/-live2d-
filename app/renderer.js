@@ -15,7 +15,6 @@ import { createCapture } from '../src/stage/capture.js'
 import { createPosture } from '../src/stage/posture.js'
 import { createPoses, POSES } from '../src/stage/poses.js'
 import { PHRASES } from '../src/stage/phrases.js'
-import { createRecorder } from '../src/stage/recorder.js'
 import { createBubble } from '../src/stage/bubble.js'
 import { createAgentLink } from '../src/stage/agent-link.js'
 import { createProfiler } from '../src/stage/perf.js'
@@ -54,7 +53,9 @@ const shell = window.shell || {
   resizeBegin: () => {},
   resizeMove: () => {},
   resizeEnd: () => {},
-  panel: () => {},
+  openSettings: () => {},
+  onSettings: () => {},
+  stageRpc: async () => ({ ok: false }),
   center: () => {},
   quit: () => {},
   devtools: () => {},
@@ -127,15 +128,13 @@ async function main() {
       expressions: state.caps.expressions || [],
       poses: state.poses,
       life: state.life,
-      // 状态变化打进录制标记，回放时能对齐「这一句是 success 时说的」
-      onState: (st) => state.recorder?.mark(`agent:${st ?? 'idle'}`),
     })
     shell.onAgentStatus?.((snap) => state.agentLink?.apply(snap))
-    bindPanel()
+    bindSettings()
+    bindTools()
     bindWindowDrag()
     bindToolsDismiss()
     bindResizeHandles()
-    bindReactionEditor()
     bindPassThrough()
     bootPerfOverlay()
     document.title = `stage · ${state.caps.model.name}`
@@ -266,12 +265,6 @@ async function bootStage() {
   state.idleFaces = createIdleFaces({ param: stage.param })
   // 终点姿势：举手 / 竖手指 / 狗尾草（数值取自模型自带的 motion3 末帧），过渡自己补
   state.poses = createPoses({ layers: state.layers })
-  // 动作录制：每帧采参数快照（物理之后、update 之前），带标记，存 JSON 回放对照
-  state.recorder = createRecorder({
-    param: stage.param,
-    layers: state.layers,
-    isPhysicsOutput: (id) => state.physics.outputs.has(id),
-  })
 
   let lastT = performance.now()
   let frameDt = 1000 / 60
@@ -350,8 +343,6 @@ async function bootStage() {
       state.life?.apply(frameDt)
       state.facePinch?.apply(frameDt)
     })
-    // 采样/回放都在这一刻：各层写完、物理算完，读到的才是这一帧真正的值
-    state.recorder?.sample(performance.now())
   })
 
   // ---------- 标定探针（开发期用：单参数覆写 / 物理读回采样） ----------
@@ -432,23 +423,6 @@ async function bootStage() {
     /** 模拟一条 DSH 状态（不接插件时也能验证联动） */
     agent(snap) { state.agentLink?.apply(snap) },
     agentState: () => state.agentLink?.state() ?? null,
-    // ---- 动作录制 ----
-    recStart(opts) { return state.recorder?.start(opts) ?? null },
-    async recStop(name = 'take') {
-      const data = state.recorder?.stop()
-      if (!data) return null
-      data.name = name
-      const r = await shell.recSave?.(name, data)
-      return { frames: data.frames.length, duration: data.duration, marks: data.marks.length, file: r?.file ?? null }
-    },
-    recMark(label) { return state.recorder?.mark(label) ?? false },
-    recList: () => shell.recList?.() ?? [],
-    async recPlay(name, opts) {
-      const data = await shell.recLoad?.(name)
-      return state.recorder?.play(data, opts) ?? false
-    },
-    recStopPlay() { return state.recorder?.stopPlay() ?? false },
-    recState: () => state.recorder?.state() ?? null,
     // ---- 改动补丁 ----
     patchExport: () => exportStagePatch(),
     patchState: () => state.patch ? { model: state.patch.model, poses: Object.keys(state.patch.poses || {}), phrases: Object.keys(state.patch.phrases || {}), regions: state.patch.regions?.regions?.length ?? 0 } : null,
@@ -749,10 +723,6 @@ function bootRegions() {
     onEvent: (ev) => {
       const name = ev.region?.name
       const isHand = name === '左手' || name === '右手'
-      // 互动也打进录制标记（tap / pet 第一步），回放时能对上动作
-      if (name && ((ev.type === 'tap') || (ev.type === 'pet' && ev.step === 1))) {
-        state.recorder?.mark(`${ev.type}:${name}`)
-      }
       // 摸胯：黑脸 + 脸红 + 护住（举手手型）+ 右转头低头微缩，气泡说「变态」那套
       if (name === '胯' && ev.type === 'pet' && ev.step === 1) {
         state.poses?.set('护胯', 340, { holdExtras: true })
@@ -888,12 +858,6 @@ function bodyAt(x, y) {
     }
   }
   return false
-}
-
-/** 指针在面板/工具条这类 HTML 控件上时一律算「要接收」 */
-function overUi(x, y) {
-  const el = document.elementFromPoint(x, y)
-  return !!el && el.tagName !== 'CANVAS'
 }
 
 function bindPassThrough() {
@@ -1084,12 +1048,7 @@ function bindPassThrough() {
 // 手动穿透时角色区完全不可点（连右键都进不来），所以必须留一个「鼠标也能点到」的退路：
 // 面板/工具条本身仍然接收鼠标，再加一个常驻浮标一键恢复。
 function setClickThrough(on) {
-  state.settings.clickThrough = !!on
-  const box = $('#click-through')
-  if (box) box.checked = !!on
-  if (on) showPassHint()
-  else hidePassHint()
-  state.recomputePass?.()
+  applyPassState(on) // 单向落到界面，不触发设置回写（广播那条路自己会进来）
   shell.set({ clickThrough: !!on })
   if (on) toast('穿透已开：角色不可点，点下方「恢复鼠标」或按 Ctrl+Alt+L', 4000)
 }
@@ -1119,11 +1078,6 @@ function hidePassHint() {
 }
 
 // ---------- 窗口轮廓拖拽改大小 ----------
-function syncSizeReadout() {
-  const el = $('#size-readout')
-  if (el) el.textContent = `${window.innerWidth} × ${window.innerHeight}`
-}
-
 function bindResizeHandles() {
   document.querySelectorAll('.rz').forEach((el) => {
     const edge = el.dataset.edge
@@ -1145,93 +1099,12 @@ function bindResizeHandles() {
       last = null
       shell.resizeEnd()
       try { el.releasePointerCapture(e.pointerId) } catch {}
-      syncSizeReadout()
       refreshMask(true)
     }
     el.addEventListener('pointerup', end)
     el.addEventListener('pointercancel', end)
   })
-  window.addEventListener('resize', () => {
-    syncSizeReadout()
-    refreshMask(true)
-  })
-  syncSizeReadout()
-}
-
-// ---------- 面板展开时贴到角色右侧，不挡角色 ----------
-const PANEL_W = 292      // 面板总宽（262 + 左右内边距）
-const PANEL_GAP = 14     // 面板左缘与角色右缘的间距
-const PANEL_PAD = 10     // 面板右侧留白
-let panelBaseOffset = null
-let panelDelta = 0       // 为面板临时加宽了多少（关面板要收回）
-
-/** 角色轮廓在窗口内的右边界（客户端像素）：取 alpha 掩码最右侧的实心像素 */
-function charRightClient() {
-  const st = state.stage
-  if (!st) return window.innerWidth
-  const r = st.canvas.getBoundingClientRect()
-  const m = state.mask || refreshMask(true)
-  if (!m) return r.right
-  for (let x = m.w - 1; x >= 0; x--) {
-    for (let y = 0; y < m.h; y++) {
-      if (m.data[y * m.w + x] > 8) return r.left + ((x + 1) / m.w) * r.width
-    }
-  }
-  return r.right
-}
-
-/** 等窗口尺寸真正落定再回调（resize 事件 + 兜底定时） */
-function afterWindowResize(done) {
-  let called = false
-  const finish = () => {
-    if (called) return
-    called = true
-    window.removeEventListener('resize', finish)
-    done()
-  }
-  window.addEventListener('resize', finish)
-  setTimeout(finish, 240)
-}
-
-/**
- * 面板贴着角色右缘展开：先按角色实际右边界算面板位置，
- * 只有当「角色 + 间距 + 面板」放不下时才把窗口往右长，长多少算多少。
- * 加宽后模型用 offset 补偿回原位，所以角色屏幕位置不动。
- */
-function setPanelExpanded(open) {
-  const panel = $('#panel')
-  const W0 = Math.max(1, window.innerWidth)
-  const o = state.viewport?.view.offsetX ?? 0
-
-  if (open) {
-    panelBaseOffset = o
-    const left = Math.round(charRightClient() + PANEL_GAP)
-    panel.style.left = `${left}px`
-    panel.style.right = 'auto'
-    const need = left + PANEL_W + PANEL_PAD
-    panelDelta = Math.max(0, need - W0)
-    if (panelDelta > 0) shell.panel({ dx: panelDelta })
-    afterWindowResize(() => {
-      if (panelDelta > 0) {
-        const w1 = Math.max(1, window.innerWidth)
-        state.viewport.set({ offsetX: (o * W0 - panelDelta) / w1 })
-      }
-      // 重建掩码供后续判定用；面板位置只按展开前算的那次为准（否则待机摆尾会把面板推来推去）
-      refreshMask(true)
-      syncSizeReadout()
-    })
-  } else {
-    panel.style.left = ''
-    panel.style.right = ''
-    const dx = -panelDelta
-    panelDelta = 0
-    if (dx) shell.panel({ dx })
-    afterWindowResize(() => {
-      state.viewport.set({ offsetX: panelBaseOffset ?? 0 })
-      syncSizeReadout()
-      refreshMask(true)
-    })
-  }
+  window.addEventListener('resize', () => refreshMask(true))
 }
 
 function bindWindowDrag() {
@@ -1242,9 +1115,8 @@ function bindWindowDrag() {
 }
 
 /**
- * 中键拖动：
- *   - 设置面板关着 → 搬窗口（主进程按全局光标锚点搬，不会累积漂移）
- *   - 设置面板开着 → 把角色在窗口里挪（改模型偏移，松手写进 settings）
+ * 中键拖动 = 把角色在窗口里挪（改模型偏移，松手写进 settings）。
+ * 搬窗口交给左键拖角色（主进程按全局光标锚点搬，不累积漂移）。
  * 注意：中键移动**不喂物理**（不产生惯性冲击），纯位移。
  */
 function bindMiddleDrag(stage) {
@@ -1253,23 +1125,15 @@ function bindMiddleDrag(stage) {
     if (e.button !== 1) return
     e.preventDefault()
     hideTools()
-    const panelOpen = !$('#panel').classList.contains('hidden')
     const v = state.viewport.view
-    st = {
-      mode: panelOpen ? 'model' : 'window',
-      x: e.screenX,
-      y: e.screenY,
-      o: { offsetX: v.offsetX, offsetY: v.offsetY },
-    }
+    st = { x: e.screenX, y: e.screenY, o: { offsetX: v.offsetX, offsetY: v.offsetY } }
     state.middleDragging = true
-    if (!panelOpen) { state.windowDragging = true; shell.dragBegin() }
     try { stage.setPointerCapture(e.pointerId) } catch {}
   })
   stage.addEventListener('pointermove', (e) => {
     if (!st) return
     const dx = e.screenX - st.x
     const dy = e.screenY - st.y
-    if (st.mode === 'window') return
     const w = Math.max(1, window.innerWidth)
     const h = Math.max(1, window.innerHeight)
     const clampOff = (v) => Math.max(-0.9, Math.min(0.9, v))
@@ -1280,18 +1144,12 @@ function bindMiddleDrag(stage) {
   })
   const end = (e) => {
     if (!st) return
-    const mode = st.mode
     st = null
     state.middleDragging = false
     try { stage.releasePointerCapture(e.pointerId) } catch {}
-    if (mode === 'model') {
-      const v = state.viewport.view
-      shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
-      refreshMask(true)
-    } else {
-      state.windowDragging = false
-      shell.dragEnd()
-    }
+    const v = state.viewport.view
+    shell.set({ offsetX: v.offsetX, offsetY: v.offsetY })
+    refreshMask(true)
   }
   stage.addEventListener('pointerup', end)
   stage.addEventListener('pointercancel', end)
@@ -1355,217 +1213,117 @@ function bindToolsDismiss() {
   }, true)
 }
 
-// ---------- 分区反应编辑器 ----------
+// ---------- 分区反应：改的是热区上的 reaction，reactions.apply 优先用它 ----------
 // 反应存在热区上（region.reaction），reactions.apply 优先用它，其次才回落到 DEFAULT_REACTIONS。
 // 所以这里改完直接 store.save()，重启保留。
 function applyReaction(regionName, kind, { exprs = [], mode = 'expr' } = {}) {
-  const region = state.store.all.find((r) => r.name === regionName)
-  if (!region) return
+  const region = state.store?.all?.find((r) => r.name === regionName)
+  if (!region) return false
   const next = { ...(region.reaction || {}) }
-  if (mode === 'toggle') {
-    if (!exprs.length) delete next[kind]
-    else next[kind] = { toggle: exprs[0] }
-  } else {
-    if (!exprs.length) delete next[kind]
-    else next[kind] = { expr: exprs }
-  }
+  if (!exprs.length) delete next[kind]
+  else next[kind] = mode === 'toggle' ? { toggle: exprs[0] } : { expr: exprs }
   region.reaction = next
   state.store.save(state.caps.model.name)
+  return true
 }
 
-function bindReactionEditor() {
-  const regionSel = $('#rx-region')
-  const kindSel = $('#rx-kind')
-  const modeSel = $('#rx-mode')
-  const box = $('#rx-exprs')
-  if (!regionSel || !box) return
+/** 热区反应快照：设置窗口拿它渲染勾选框 */
+function reactionsSnapshot() {
+  return Object.fromEntries((state.store?.all || []).map((r) => [r.name, r.reaction || {}]))
+}
 
-  const regions = state.store.all.map((r) => r.name)
-  regionSel.innerHTML = regions.map((n) => `<option>${n}</option>`).join('')
-  const exprs = (state.caps.expressions || []).map((e) => e.name)
-
-  const current = () => {
-    const region = state.store.all.find((r) => r.name === regionSel.value)
-    const kind = kindSel.value
-    const rx = region?.reaction?.[kind]
+/**
+ * 设置窗口 → 舞台窗口的 RPC（主进程用 executeJavaScript 调进来）。
+ * 只处理「需要舞台内部状态」的三类事：读快照 / 改热区反应 / 导出补丁。
+ * 纯设置项（缩放、跟随、气泡、置顶…）走主进程广播，不经过这里。
+ */
+async function stageRpc(op, payload) {
+  if (op === 'meta') {
     return {
-      mode: rx?.toggle ? 'toggle' : 'expr',
-      picked: new Set(rx?.toggle ? [rx.toggle] : (rx?.expr || [])),
+      model: state.caps?.model?.name || '',
+      regions: (state.store?.all || []).map((r) => r.name),
+      exprs: (state.caps?.expressions || []).map((e) => e.name),
+      reactions: reactionsSnapshot(),
+      poses: Object.keys(POSES),
+    }
+  }
+  if (op === 'reaction') {
+    const { region, kind = 'tap', exprs = [], mode = 'expr' } = payload || {}
+    applyReaction(region, kind === 'pet' ? 'pet' : 'tap', { exprs, mode })
+    return { reactions: reactionsSnapshot() }
+  }
+  if (op === 'reactionReset') {
+    const region = state.store?.all?.find((r) => r.name === payload?.region)
+    if (region) {
+      const d = DEFAULT_REACTIONS[payload.region]
+      region.reaction = d ? JSON.parse(JSON.stringify(d)) : {}
+      state.store.save(state.caps.model.name)
+    }
+    return { reactions: reactionsSnapshot() }
+  }
+  if (op === 'patchExport') return exportStagePatch()
+  return null
+}
+window.__stageRpc = stageRpc
+
+// ---------- 设置同步：主进程广播 → 舞台立即生效 ----------
+function applyPassState(on) {
+  state.settings = state.settings || {}
+  state.settings.clickThrough = !!on
+  if (on) showPassHint()
+  else hidePassHint()
+  state.recomputePass?.()
+}
+
+/**
+ * 把设置值落到各层。
+ * 有意的**单向**：只读 settings、绝不回写 —— 否则「广播 → apply → shell.set → 广播」会打环。
+ */
+function applySettings(next) {
+  if (!next || typeof next !== 'object') return
+  state.settings = { ...state.settings, ...next }
+
+  const zoom = Number(state.settings.zoom)
+  if (Number.isFinite(zoom) && state.viewport) {
+    if (Math.abs(state.viewport.view.zoom - zoom) > 1e-4) {
+      state.viewport.set({ zoom })
+      state.bubble?.reposition()
+      refreshMask(true)
     }
   }
 
-  const render = () => {
-    const cur = current()
-    modeSel.value = cur.mode
-    box.innerHTML = exprs.map((n) => (
-      `<label><input type="checkbox" value="${n}"${cur.picked.has(n) ? ' checked' : ''}>${n}</label>`
-    )).join('')
-    box.querySelectorAll('input').forEach((inp) => {
-      inp.onchange = () => {
-        let picked = [...box.querySelectorAll('input:checked')].map((i) => i.value)
-        // 切换型只能用一个表情：后勾的顶替前面的
-        if (modeSel.value === 'toggle' && picked.length > 1) {
-          picked = [picked[picked.length - 1]]
-          box.querySelectorAll('input').forEach((i) => { i.checked = i.value === picked[0] })
-        }
-        applyReaction(regionSel.value, kindSel.value, { exprs: picked, mode: modeSel.value })
-      }
-    })
-  }
+  const strength = Number(state.settings.strength ?? 1)
+  state.gaze?.set({ enabled: state.settings.gaze !== false, strength })
+  state.posture?.set({ strength })
+  state.petSway?.set({ gain: Number(state.settings.petGain ?? 1.6) })
 
-  regionSel.onchange = render
-  kindSel.onchange = render
-  modeSel.onchange = () => {
-    const picked = [...box.querySelectorAll('input:checked')].map((i) => i.value)
-    const use = modeSel.value === 'toggle' ? picked.slice(0, 1) : picked
-    applyReaction(regionSel.value, kindSel.value, { exprs: use, mode: modeSel.value })
-    render()
-  }
-  $('#rx-reset').onclick = () => {
-    const region = state.store.all.find((r) => r.name === regionSel.value)
-    if (!region) return
-    const d = DEFAULT_REACTIONS[regionSel.value]
-    region.reaction = d ? JSON.parse(JSON.stringify(d)) : {}
-    state.store.save(state.caps.model.name)
-    render()
-    toast(`${regionSel.value} 反应已恢复默认`)
-  }
-  render()
+  const bubbleOn = state.settings.bubble !== false
+  if (!bubbleOn && state.bubble?.visible) state.bubble.hide()
+  else if (bubbleOn && !state.bubble?.visible && state.bubble?.text) state.bubble.show()
+  state.bubble?.setSide(state.settings.bubbleSide === 'left' ? 'left' : 'right')
+
+  applyPassState(!!state.settings.clickThrough)
 }
 
-function bindPanel() {
-  const panel = $('#panel')
-  const isOpen = () => !panel.classList.contains('hidden')
-  // 开：窗口向右长出一块面板位；关：收回。角色视觉位置不动，所以面板永远不压角色
-  const show = (on) => {
-    const open = on === undefined ? !isOpen() : !!on
-    if (open === isOpen()) return
-    panel.classList.toggle('hidden', !open)
-    setPanelExpanded(open)
-  }
+function bindSettings() {
+  shell.onSettings?.((next) => applySettings(next))
+  shell.onClickThrough?.((v) => applyPassState(!!v))
+}
 
+// ---------- 右键工具条：设置窗口 / 退出（角色铺满窗口后，这是唯一入口） ----------
+function bindTools() {
   window.addEventListener('contextmenu', (e) => {
     e.preventDefault()
-    // 头部 / 脸部捏脸区右键 = 触发「前倾」，不弹菜单（避免和互动打架）
+    // 头部 / 脸部右键 = 前倾开关，不弹菜单（避免和互动打架）
     const r = regionAtClient(e.clientX, e.clientY)
     if (r && (r.name === '头' || r.name === '左脸' || r.name === '右脸')) { toggleLean(); return }
     showTools()
   })
   window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return
-    show(false)
-    hideTools()
+    if (e.key === 'Escape') hideTools()
   })
-  $('#panel-close').onclick = () => show(false)
-  $('#tool-settings').onclick = () => { hideTools(); show(true) }
-  $('#tool-quit').onclick = () => shell.quit()
-
-  const s = state.settings
-  syncSizeReadout()
-  $('#zoom').value = Number(s.zoom) || 1
-  $('#gaze').checked = s.gaze !== false
-  $('#strength').value = Number(s.strength ?? 1)
-  $('#top').checked = !!s.alwaysOnTop
-  $('#click-through').checked = !!s.clickThrough
-  // 气泡：开关 + 挂哪一侧
-  const bubbleOn = $('#bubble-on')
-  const bubbleSide = $('#bubble-side')
-  if (bubbleOn) {
-    bubbleOn.checked = s.bubble !== false
-    bubbleOn.onchange = (e) => {
-      const on = !!e.target.checked
-      state.settings.bubble = on
-      shell.set({ bubble: on })
-      if (!on) state.bubble?.hide()
-      toast(on ? '气泡：开' : '气泡：关')
-    }
-  }
-  if (bubbleSide) {
-    bubbleSide.value = s.bubbleSide === 'left' ? 'left' : 'right'
-    bubbleSide.onchange = (e) => {
-      const side = e.target.value === 'left' ? 'left' : 'right'
-      state.settings.bubbleSide = side
-      shell.set({ bubbleSide: side })
-      state.bubble?.setSide(side)
-    }
-  }
-
-  // ---- 动作录制：开始 / 停止并存 / 列表 / 回放 ----
-  $('#open-editor') && ($('#open-editor').onclick = () => shell.openEditor?.())
-  $('#patch-export') && ($('#patch-export').onclick = () => exportStagePatch())
-  const recBtn = $('#rec-start')
-  const recSel = $('#rec-list')
-  let recOn = false
-  const refreshRecList = async () => {
-    if (!recSel) return
-    const list = (await shell.recList?.()) || []
-    recSel.innerHTML = list.map((n) => `<option>${n}</option>`).join('') || '<option value="">（还没有录制）</option>'
-  }
-  refreshRecList()
-  if (recBtn) {
-    recBtn.onclick = async () => {
-      if (!recOn) {
-        state.recorder?.start()
-        recOn = true
-        recBtn.textContent = '停止并保存'
-        toast('录制中…')
-      } else {
-        const data = state.recorder?.stop()
-        recOn = false
-        recBtn.textContent = '开始录制'
-        if (!data) { toast('没录到内容'); return }
-        const name = `take-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}`
-        data.name = name
-        const r = await shell.recSave?.(name, data)
-        toast(r?.ok ? `已保存 ${name}` : '保存失败')
-        await refreshRecList()
-        if (recSel) recSel.value = name
-      }
-    }
-  }
-  $('#rec-refresh') && ($('#rec-refresh').onclick = () => refreshRecList())
-  $('#rec-play') && ($('#rec-play').onclick = async () => {
-    const name = recSel?.value
-    if (!name) { toast('先选一条录制'); return }
-    const data = await shell.recLoad?.(name)
-    if (!data) { toast('读不到这条录制'); return }
-    state.recorder?.play(data)
-    toast(`回放 ${name}`)
-  })
-  $('#rec-stop-play') && ($('#rec-stop-play').onclick = () => { state.recorder?.stopPlay(); toast('已停止回放') })
-
-  $('#win-center').onclick = () => shell.center()
-
-  $('#zoom').oninput = (e) => {
-    const zoom = Number(e.target.value)
-    state.viewport.set({ zoom })
-    shell.set({ zoom })
-    refreshMask(true)
-  }
-  $('#gaze').onchange = (e) => {
-    state.gaze.set({ enabled: e.target.checked })
-    shell.set({ gaze: e.target.checked })
-  }
-  $('#strength').oninput = (e) => {
-    const strength = Number(e.target.value)
-    state.gaze.set({ strength })
-    state.posture?.set({ strength })
-    shell.set({ strength })
-  }
-  const petGain = (v) => {
-    state.petSway.set({ gain: v })
-  }
-  $('#pet-gain').value = Number(s.petGain ?? 1.6)
-  $('#pet-gain').oninput = (e) => {
-    const v = Number(e.target.value)
-    petGain(v)
-    shell.set({ petGain: v })
-  }
-  $('#top').onchange = (e) => shell.set({ alwaysOnTop: e.target.checked })
-  $('#click-through').onchange = (e) => setClickThrough(e.target.checked)
-  shell.onClickThrough((v) => setClickThrough(v))
-  $('#open-harness').onclick = () => shell.openHarness()
-  $('#quit').onclick = () => shell.quit()
+  $('#tool-settings')?.addEventListener('click', () => { hideTools(); shell.openSettings?.() })
+  $('#tool-quit')?.addEventListener('click', () => shell.quit())
 }
 
 main()

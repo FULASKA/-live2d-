@@ -34,6 +34,9 @@ const VENDOR = [
   'node_modules/untitled-pixi-live2d-engine/dist/cubism.es.js',
   'node_modules/@pixi/sound/lib/index.mjs',
   'app/index.html',
+  'app/settings.html',
+  'app/settings.js',
+  'app/editor.html',
   'src/server/stage-server.mjs',
 ]
 

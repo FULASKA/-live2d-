@@ -137,7 +137,6 @@ function startAgentStatusFeed(target) {
 
 // 拖窗口轮廓改大小：无边框窗口没法靠系统边框，渲染层的八个把手发增量，这里按边缘锚点算 bounds
 let resizeBase = null
-let panelDelta = 0 // 为设置面板临时加宽的像素（存盘时不算进去）
 function wireResize() {
   ipcMain.on('win:resize-begin', (_e, edge) => {
     if (!win) return
@@ -161,20 +160,13 @@ function wireResize() {
   })
   ipcMain.on('win:resize-end', () => {
     resizeBase = null
-    // 存的是「收起面板时的宽度」：面板宽度是临时的，不该跟着进配置文件
-    if (win && panelDelta) settings.width = Math.max(220, win.getContentSize()[0] - panelDelta)
+    if (win) {
+      const [w, h] = win.getContentSize()
+      settings.width = w
+      settings.height = h
+    }
     saveSettings()
-  })
-
-  // 面板展开/收起：按增量临时改宽度，不写 settings（下次启动仍是紧凑窗）
-  ipcMain.on('win:panel', (_e, { dx = 0 } = {}) => {
-    if (!win || !dx) return
-    const [w, h] = win.getContentSize()
-    const { workArea } = screen.getPrimaryDisplay()
-    const maxW = Math.max(220, workArea.width - 8)
-    const next = Math.max(220, Math.min(maxW, Math.round(w + dx)))
-    win.setContentSize(next, h)
-    panelDelta += next - w
+    broadcastSettings()
   })
 }
 
@@ -207,6 +199,38 @@ function wireWindowDrag() {
   })
 }
 
+// ---------- 子窗口（设置 / 动作编辑器）----------
+// 覆盖层窗口只负责角色：设置类界面一律开成独立普通窗口（可拖动、有标题栏、不进穿透层），
+// 覆盖层也就不用为了塞面板临时改宽度——尺寸与内容从此解耦。
+const childWins = new Map()
+function openChild(key, { file, ...opts }) {
+  const cur = childWins.get(key)
+  if (cur && !cur.isDestroyed()) { cur.focus(); return cur }
+  const w = new BrowserWindow({
+    autoHideMenuBar: true,
+    backgroundColor: '#0f131b',
+    ...opts,
+    webPreferences: {
+      preload: path.join(ROOT, 'app', 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      // 子窗口被挡住也不能停帧（编辑器预览要一直播）
+      backgroundThrottling: false,
+    },
+  })
+  w.loadURL(`${srv.url}/app/${file}`)
+  childWins.set(key, w)
+  w.on('closed', () => { if (childWins.get(key) === w) childWins.delete(key) })
+  return w
+}
+
+/** 设置变了广播给所有窗口：覆盖层按新值立即生效，设置窗口刷新读数 */
+function broadcastSettings() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('shell:changed', { ...settings })
+  }
+}
+
 // ---------- IPC ----------
 function wireIpc() {
   ipcMain.handle('shell:get', () => ({ ...settings, token, port: srv?.port || null }))
@@ -217,6 +241,7 @@ function wireIpc() {
     }
     applyWindowSettings()
     await saveSettings()
+    broadcastSettings()
     return { ...settings }
   })
   ipcMain.on('win:move', (_e, { dx = 0, dy = 0 } = {}) => {
@@ -248,50 +273,29 @@ function wireIpc() {
   ipcMain.handle('actions:load', async () => {
     try { return JSON.parse(await readFile(actionsFile(), 'utf8')) } catch { return null }
   })
-  let editorWin = null
-  ipcMain.on('shell:editor', () => {
-    if (editorWin && !editorWin.isDestroyed()) { editorWin.focus(); return }
-    editorWin = new BrowserWindow({
-      width: 1240, height: 840, minWidth: 900, minHeight: 620,
-      title: '动作编辑器 · Live2D Stage',
-      backgroundColor: '#0f131b',
-      autoHideMenuBar: true,
-      webPreferences: {
-        preload: path.join(ROOT, 'app', 'preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        // 被别的窗口挡住也不能停帧：预览要一直能播
-        backgroundThrottling: false,
-      },
-    })
-    editorWin.loadURL(`${srv.url}/app/editor.html`)
-    editorWin.on('closed', () => { editorWin = null })
-  })
-  // ---------- 动作录制：存 / 列 / 读 ----------
-  // 录到的数据是「每帧参数 + 标记」，放 userData/recordings 里，跟应用一起搬走
-  const recDir = () => path.join(app.getPath('userData'), 'recordings')
-  const safeName = (name) => String(name || 'take').replace(/[^\w\u4e00-\u9fa5.-]+/g, '_').slice(0, 60)
-  ipcMain.handle('rec:save', async (_e, name, data) => {
+  ipcMain.on('shell:editor', () => openChild('editor', {
+    file: 'editor.html',
+    width: 1240, height: 840, minWidth: 900, minHeight: 620,
+    title: '动作编辑器 · Live2D Stage',
+  }))
+  ipcMain.on('shell:settings', () => openChild('settings', {
+    file: 'settings.html',
+    width: 432, height: 760, minWidth: 360, minHeight: 420,
+    title: '设置 · Live2D Stage',
+  }))
+  // ---------- 设置窗口 → 舞台窗口的 RPC ----------
+  // 设置窗口不重复加载模型：它只发指令、拿快照，真正的状态都在舞台窗口里。
+  ipcMain.handle('stage:rpc', async (_e, op, payload) => {
+    if (!win || win.isDestroyed()) return { ok: false, error: '舞台窗口还没起来' }
     try {
-      await mkdir(recDir(), { recursive: true })
-      const file = path.join(recDir(), `${safeName(name)}.json`)
-      await writeFile(file, JSON.stringify(data))
-      return { ok: true, file }
-    } catch (e) { return { ok: false, error: String(e?.message || e) } }
-  })
-  ipcMain.handle('rec:list', async () => {
-    try {
-      const { readdir } = await import('node:fs/promises')
-      await mkdir(recDir(), { recursive: true })
-      const files = (await readdir(recDir())).filter((f) => f.endsWith('.json'))
-      return files.map((f) => f.replace(/\.json$/, ''))
-    } catch { return [] }
-  })
-  ipcMain.handle('rec:load', async (_e, name) => {
-    try {
-      const file = path.join(recDir(), `${safeName(name)}.json`)
-      return JSON.parse(await readFile(file, 'utf8'))
-    } catch { return null }
+      const value = await win.webContents.executeJavaScript(
+        `window.__stageRpc(${JSON.stringify(String(op || ''))}, ${JSON.stringify(payload ?? null)})`,
+        true,
+      )
+      return { ok: true, value }
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) }
+    }
   })
   ipcMain.on('win:center', () => {
     if (!win) return

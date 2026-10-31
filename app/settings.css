@@ -1,0 +1,61 @@
+/* 设置窗口（独立普通窗口）：表单样式从覆盖层的 style.css 搬过来，
+   覆盖层不再有面板，所以这些规则只在这里生效。 */
+html, body { margin: 0; padding: 0; height: 100%; }
+
+body.settings {
+  background: #0f131b;
+  color: #e8eef8;
+  font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+}
+
+#panel {
+  height: 100%;
+  overflow: auto;
+  padding: 6px 16px 18px;
+  box-sizing: border-box;
+}
+
+#panel section { padding: 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+#panel section:first-of-type { border-top: 0; }
+#panel h3 { margin: 0 0 8px; font-size: 11px; font-weight: 500; color: #8fa3bd; letter-spacing: 0.04em; }
+
+#panel .row { display: flex; align-items: center; gap: 6px; margin: 5px 0; }
+#panel .lbl { color: #9fb6d6; min-width: 52px; }
+#panel input[type=range] { flex: 1; accent-color: #5b9dff; }
+#panel input[type=checkbox] { accent-color: #5b9dff; margin: 0 4px 0 0; }
+
+#panel button {
+  background: #12161f; color: #e8eef8; border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer;
+}
+#panel button:hover { border-color: rgba(120, 180, 255, 0.6); }
+#panel button.wide { flex: 1; }
+
+#panel select {
+  background: #12161f; color: #e8eef8; border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px; padding: 3px 6px; font: inherit; max-width: 100%;
+}
+
+#panel .readout { font-variant-numeric: tabular-nums; color: #9fb6d6; }
+#panel .hint { color: #7d8fa8; font-size: 11px; margin-top: 6px; }
+#panel .hint b { color: #a9c2e4; font-weight: 600; }
+
+#panel .chips { flex-wrap: wrap; gap: 4px 6px; max-height: 148px; overflow: auto; }
+#panel .chips label {
+  display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1); font-size: 11px; cursor: pointer; opacity: 0.85;
+}
+#panel .chips label:has(input:checked) { border-color: rgba(120, 180, 255, 0.75); color: #cfe0ff; opacity: 1; }
+#panel .chips input { margin: 0; }
+
+#panel .footer { display: flex; gap: 8px; }
+#panel .footer button { flex: 1; }
+
+#status { min-height: 16px; margin-top: 10px; color: #8fd0ff; font-size: 11px; }
+#status.warn { color: #e0b264; }
+
+/* 滚动条：跟深色窗口一致 */
+#panel::-webkit-scrollbar { width: 10px; }
+#panel::-webkit-scrollbar-thumb { background: rgba(120, 150, 200, 0.25); border-radius: 5px; border: 3px solid #0f131b; }
+#panel::-webkit-scrollbar-track { background: transparent; }
