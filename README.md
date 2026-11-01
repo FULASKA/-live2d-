@@ -18,12 +18,12 @@ Windows 桌面上的 Live2D 角色：透明无边框窗口、跟随鼠标视线�
 
 ## 下载与安装
 
-1. 到 [Releases](../../releases) 下载 `dafeiyu-live2d-pet-v1.0.0-win32-x64.zip`；
+1. 到 [Releases](../../releases) 下载 `dafeiyu-live2d-pet-v1.0.1-win32-x64.zip`；
 2. 解压到一个固定目录（路径含中文没问题）；
 3. 在 `大肥鱼Live2d桌宠.exe` 旁边新建 **`model`** 文件夹，把模型整个放进去：
 
 ```
-大肥鱼Live2d桌宠-v1.0.0-win32-x64\
+大肥鱼Live2d桌宠-v1.0.1-win32-x64\
   大肥鱼Live2d桌宠.exe
   model\
     大肥鱼.model3.json
@@ -33,6 +33,7 @@ Windows 桌面上的 Live2D 角色：透明无边框窗口、跟随鼠标视线�
 ```
 
 4. 双击 `大肥鱼Live2d桌宠.exe` —— 自动读 `model\` 里的模型，**不用配置任何路径**。
+   第一次运行如果还没放模型，程序会开一个引导窗口告诉你怎么放（不再闪退）。
 
 配置里只记相对路径（`model/大肥鱼.model3.json`），整个文件夹挪位置、拷到别的机器都不用改。
 
@@ -69,13 +70,31 @@ Windows 桌面上的 Live2D 角色：透明无边框窗口、跟随鼠标视线�
   全部表情与官方姿势（默认手 / 竖手指 / 举手 / 狗尾草）、体型拉条、拖拽物理、开机自启、气泡开关…
 - 快捷键：`Ctrl+Alt+L` 鼠标穿透，`Ctrl+Alt+Q` 退出
 
+### 模型贴图太大？跑一下 `贴图压缩.cmd`
+
+模型的 4096/8192 贴图解压后能到 600MB，桌宠整体吃 2GB 内存。双击包内的 `贴图压缩.cmd`，
+会把贴图按最长边缩到 2048 并自动切过去（实测 592MB → 64MB，整程序 2.0GB → 0.6GB）。
+
+### 动作编辑器
+
+设置窗口 →「动作编辑器」，或 `大肥鱼Live2d桌宠.exe` 里由设置面板打开。可以：
+
+- 实时拖参数、试播、复制/粘贴关键帧（`Ctrl+C` / `Ctrl+V`）
+- 调预览的大小与位置（拖动 / 滚轮 / 双击复位）
+- 内置的姿势（默认手 / 竖手指 / 举手 / 狗尾草 / 护胯）和 10 个待机动作都列在左栏，可直接改成自己的版本
+- 动作存档：`actions.json`（`%APPDATA%\live2d-stage\`），带台词字段，插件的 `live2d_actions` 工具读写同一份
+
 ## 接入 DSH（可选）
 
 `dsh-live2d-bridge` 是配套的 DSH 插件：桌宠启动后把「端口 + token」写到 `~/.dsh/live2d/endpoint.json`，插件据此：
 
-1. 把会话状态投到角色上（思考中 / 干活中 / 等你确认 / 成功 / 出错）；
-2. 给 agent 注册 `live2d`、`live2d_status` 两个工具，让 AI 主动说话、换表情、做动作；
-3. 新会话开始自动报到：「连接成功啦～」+ 竖食指。
+1. 把会话状态投到角色上（思考中 / 干活中 / 等你确认 / 成功 / 出错），干活时会带上具体动作：
+   「写文件 · editor.js」「搜代码 · agent-link」「跑命令 · npm run pack」；
+2. 给 agent 注册 `live2d`、`live2d_status`、`live2d_actions` 三个工具：
+   让 AI 主动说话、换表情、做动作，也能直接读写动作存档（和编辑器同一份 `actions.json`）；
+3. 回合结束时把最终回复说进气泡：**60 字以内原文直出**，更长的才压成一句；
+   回复里带 `[表情: 描述]` 时还会去表情包库里取图，气泡上图下字；
+4. 新会话开始自动报到：「连接成功啦～」+ 竖食指（320ms 到位，不再拖 4 秒）。
 
 插件包见 Releases 里的 `dsh-live2d-bridge.zip`；源码在 [dsh-live2d-bridge](../../)（同账号仓库）。装法见包内说明。
 
@@ -91,6 +110,22 @@ npm run pack                         # 打便携版到 release/
 
 无头回归（真实时间等待 + 截图 + 参数取样）：`node scripts/shot.mjs --url ... --out tmp/x.png`。
 设计决议与接口契约见 [`docs/SPEC.md`](docs/SPEC.md)、[`docs/PROTOCOL.md`](docs/PROTOCOL.md)。
+
+## 致谢
+
+这个项目几乎每一步都站在别人的肩膀上，认真列一下：
+
+- **Live2D Inc.** —— Cubism 5 SDK / Cubism Core。没有它就没有任何 Live2D 角色。
+- **PixiJS 团队** —— `pixi.js`，整个渲染底座。
+- **pixi-live2d-display（guansss）** 与 **untitled-pixi-live2d-engine** —— Cubism 的 Pixi 运行时。
+  本项目用后者加载模型，物理 / 姿态 / 参数写点的那套约定也是在它的文档和源码里反复读出来的。
+- **DeepSeek Harness（DSH）** —— 桌宠的「大脑」接入口；`dsh-live2d-bridge` 就是它的插件。
+- **dsh-pet、dsh-xiaoke-widget** —— 工作状态的档位语义（thinking / working / waiting / success / error）
+  直接对齐了这两位的实现，省了很多试错；后者二创自 **MeteorNOX/DeepSeek-Balance-Whale-Widget**。
+- **模型作者** —— 原画 / 拆分 **神宫凉子**（[BV1KmxY66EZ3](https://www.bilibili.com/video/BV1KmxY66EZ3)），
+  Live2D 建模 **霓虹猫_NeonNeko**。模型不随包分发，请尊重作者要求。
+- 以及在 B 站 / 贴吧 / Discord 里分享参数、动作和踩坑经验的朋友们——很多细节（比如物理输入参数必须在
+  `physics.evaluate` 之前写）都是从你们留下的讨论里学到的。
 
 ## 许可与署名
 

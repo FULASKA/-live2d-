@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第一次运行 · Live2D 桌宠</title>
+<style>
+  :root {
+    --bg: #11151c;
+    --panel: #171e28;
+    --line: #24303f;
+    --text: #e8eef7;
+    --muted: #93a1b3;
+    --accent: #6fd2ff;
+    --accent-2: #4aa8ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 20% -10%, #1b2637 0%, transparent 60%), var(--bg);
+    color: var(--text);
+    font: 14px/1.65 "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+    -webkit-user-select: none;
+    display: flex;
+    flex-direction: column;
+    padding: 26px 28px 18px;
+  }
+  h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: .2px; }
+  h1 .dot { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .card h2 { font-size: 13px; color: var(--accent); margin: 0 0 10px; font-weight: 600; }
+  ol { margin: 0; padding-left: 20px; }
+  ol li { margin: 4px 0; }
+  code {
+    background: #0d131b;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font: 12px/1.5 Consolas, "Cascadia Mono", monospace;
+    color: #cfe6ff;
+  }
+  .drop {
+    border: 1.5px dashed #35506b;
+    border-radius: 12px;
+    padding: 18px;
+    text-align: center;
+    color: var(--muted);
+    transition: .15s;
+    margin-bottom: 14px;
+  }
+  .drop.hot { border-color: var(--accent); color: var(--text); background: #16202c; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: #1d2836;
+    color: var(--text);
+    border-radius: 9px;
+    padding: 9px 16px;
+    font: inherit;
+    cursor: pointer;
+    transition: .15s;
+  }
+  button:hover { background: #243244; border-color: #35506b; }
+  button.primary {
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    border-color: transparent;
+    color: #06202e;
+    font-weight: 700;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  button.ghost { background: transparent; }
+  .status { min-height: 22px; font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+  .status.err { color: #ff9b9b; }
+  .status.ok { color: #8ee6a8; }
+  .foot { margin-top: auto; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: #6d7d90; font-size: 12px; }
+  .foot a, .link { color: #7fb6e0; text-decoration: none; cursor: pointer; }
+  .foot a:hover, .link:hover { text-decoration: underline; }
+  .grow { flex: 1; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>第一次运行：把模型放进来<span class="dot">。</span></h1>
+  <p class="sub">本程序<b>不附带 Live2D 模型</b>（模型版权归原作者）。放一次，以后就记住了。</p>
+
+  <div class="card">
+    <h2>方式一：放到 model 文件夹（推荐）</h2>
+    <ol>
+      <li>点下面的「打开 model 文件夹」，会打开 <code>模型目录</code></li>
+      <li>把模型的<b>整个文件夹</b>（含 <code>.moc3</code>、<code>.model3.json</code>、贴图）拷进去</li>
+      <li>关掉这个窗口，重新双击桌宠</li>
+    </ol>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="btn-model-dir">打开 model 文件夹</button>
+      <button id="btn-choose">直接选 .model3.json</button>
+    </div>
+  </div>
+
+  <div class="drop" id="drop">
+    也可以把 <b>.model3.json</b> 直接拖进这个窗口
+  </div>
+
+  <p class="status" id="status"></p>
+
+  <div class="foot">
+    <span id="ver"></span>
+    <span class="grow"></span>
+    <span class="link" id="btn-log">打不开？看日志</span>
+    <span class="link" id="btn-exe">程序目录</span>
+    <span class="link" id="btn-quit">退出</span>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id)
+const status = (msg, kind = '') => { const el = $('status'); el.textContent = msg || ''; el.className = 'status ' + kind }
+
+async function init() {
+  const p = await window.shell.firstRunPaths()
+  $('ver').textContent = `v${p.version}`
+  $('btn-model-dir').onclick = async () => {
+    const r = await window.shell.firstRunOpen('model')
+    status(r.ok ? `已打开：${r.path}` : `打不开文件夹：${r.error || '未知错误'}`)
+  }
+  $('btn-choose').onclick = async () => {
+    const r = await window.shell.firstRunChoose()
+    if (r && r.ok) status('已记住模型，正在重新启动……', 'ok')
+  }
+  $('btn-log').onclick = () => window.shell.firstRunOpen('log')
+  $('btn-exe').onclick = () => window.shell.firstRunOpen('exe')
+  $('btn-quit').onclick = () => window.shell.quit()
+}
+
+// 拖文件进来：只接 .model3.json，其它给个提示，不装死
+const drop = $('drop')
+for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('hot') })
+for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, () => drop.classList.remove('hot'))
+drop.addEventListener('drop', async (e) => {
+  e.preventDefault()
+  const f = e.dataTransfer?.files?.[0]
+  if (!f) return
+  const p = window.shell.pathForFile(f)
+  if (!p) return status('拿不到文件路径，请用上面的按钮选择', 'err')
+  if (!p.toLowerCase().endsWith('.model3.json')) return status('这个不是 .model3.json，选模型清单那个文件', 'err')
+  const r = await window.shell.firstRunSetModel(p)
+  if (r.ok) status('已记住模型，正在重新启动……', 'ok')
+  else status(r.error || '设置失败', 'err')
+})
+
+init()
+</script>
+</body>
+</html>

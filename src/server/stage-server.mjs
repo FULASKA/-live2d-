@@ -289,6 +289,16 @@ export async function createStageServer({
       }
       if (p === '/api/log') return json(res, 200, { log: LOG, events })
 
+      // 表情包配图：桥接把 [表情: 描述] 落成 ~/.dsh/live2d/meme-*.png，气泡从这里取。
+      // 文件名严格白名单（只允许 meme-* + 图片后缀），杜绝路径穿越。
+      if (p.startsWith('/api/meme/')) {
+        const name = p.slice('/api/meme/'.length)
+        if (!/^meme-[A-Za-z0-9-]+\.(png|jpe?g|gif|webp)$/i.test(name)) return json(res, 400, { error: 'bad name' })
+        const abs = path.join(homedir(), '.dsh', 'live2d', name)
+        if (await serveFile(res, abs)) return
+        return json(res, 404, { error: 'not found' })
+      }
+
       if (p.startsWith('/m/')) {
         const rel = p.slice(3)
         if (rel === MODEL_FILE) {

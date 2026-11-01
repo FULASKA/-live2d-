@@ -90,8 +90,13 @@ async function main() {
   }
   console.log(`[pack] 完整版：${path.join(appDir, `${APP_NAME}.exe`)}`)
 
-  // 把「挂载模型.cmd」放到 exe 旁边（用户可直接拖模型上去）
+  // 把「挂载模型.cmd」「贴图压缩.cmd」放到 exe 旁边（用户可直接拖模型上去 / 一键缩贴图）
   try { await cp(path.join(ROOT, '挂载模型.cmd'), path.join(appDir, '挂载模型.cmd')) } catch {}
+  try { await cp(path.join(ROOT, '贴图压缩.cmd'), path.join(appDir, '贴图压缩.cmd')) } catch {}
+  try {
+    await cp(path.join(ROOT, 'tools', 'shrink-textures.ps1'), path.join(appDir, 'tools', 'shrink-textures.ps1'))
+    console.log('[pack] 已带上 tools/shrink-textures.ps1')
+  } catch (e) { console.warn('[pack] 贴图压缩脚本拷贝失败：', e.message) }
 
   // ① 完整版内置模型：放在 exe 旁边的 model/（相对路径，用户可直接替换/管理）
   if (MODEL_SRC) {

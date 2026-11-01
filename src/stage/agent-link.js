@@ -24,9 +24,40 @@ const EXPRS_OF = {
 
 const HIDE_AFTER_MS = { success: 4600, error: 6000, result: 2200 }
 
+// 工具 → 一句人话：状态一直是 working 的时候，光靠状态档她会长时间一动不动，
+// 所以「换了工具」也要出个声，让她看起来真的在跟着干活。
+const TOOL_LABEL = {
+  write: '写文件', edit: '改文件', read: '翻代码', grep: '搜代码', glob: '找文件',
+  ops_bash: '跑命令', bash: '跑命令', pwsh: '跑命令', ops_read_files: '读文件',
+  web_search: '上网查', web_fetch: '读网页', ask_user_question: '等你回话',
+  todo_write: '排任务', subagent: '派活', workflow: '跑流程', send_meme: '找表情包',
+  live2d: '摆动作', skill: '翻技能书',
+}
+const TOOL_LINES = {
+  写文件: ['写下来…', '这段我记一下', '敲字中…'],
+  改文件: ['改一改', '这儿得动一下', '修修补补…'],
+  翻代码: ['让我看看…', '翻翻代码', '嗯……这里有点眼熟'],
+  搜代码: ['搜一下', '找找在哪儿', '关键词丢进去…'],
+  找文件: ['文件呢…', '翻目录中', '我记得有个…'],
+  跑命令: ['跑个命令', '命令行一下', '等它跑完…'],
+  读文件: ['读一下', '看看内容', '翻两页…'],
+  上网查: ['查一下资料', '上网看看', '搜搜看…'],
+  读网页: ['读网页中', '这页有点长…', '爬一下'],
+  等你回话: ['等你回话呢', '我在这儿等', '你说了算'],
+  排任务: ['先排个顺序', '列个清单', '一步一步来'],
+  派活: ['叫个帮手', '分头干', '派人去了'],
+  跑流程: ['跑流程中', '好几个一起…', '开工了'],
+  找表情包: ['找张图', '这张合适…', '表情包时间'],
+  摆动作: ['动一下', '摆个姿势', '看这儿'],
+  翻技能书: ['翻技能书', '查手册', '按流程来'],
+}
+
+
 export function createAgentLink({ bubble, layers, expressions = [], poses, life, mouth, onState } = {}) {
   let lastState = '__init__'
   let lastAt = 0
+  let lastTool = null
+  let lastToolKey = ''
   let hideTimer = 0
   let enabled = true
   let successMood = false
@@ -71,6 +102,8 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
       clearExpression()
       if (successMood) { try { mouth?.clearMood() } catch {}; successMood = false }
       try { bubble?.unlock?.('agent') } catch {}
+      lastTool = null
+      lastToolKey = ''
       scheduleHide(1200)
       try { onState?.(null) } catch {}
       return
@@ -91,6 +124,22 @@ export function createAgentLink({ bubble, layers, expressions = [], poses, life,
       successMood = false
     }
     bubble?.say(state, { owner: busy ? 'agent' : null })
+
+    // 换了工具就补一句「正在写文件 / 搜代码」：状态档不变时，光靠 working 一句话会挂很久，
+    // 看起来像没在干活。这里只在工具（或细节）真的变了才说话，不会每 400ms 刷屏。
+    const tool = snap?.tool ? String(snap.tool) : null
+    const detail = snap?.detail ? String(snap.detail) : ''
+    const toolKey = `${tool || ''}|${detail}`
+    if (busy && (tool || detail) && toolKey !== lastToolKey) {
+      const label = TOOL_LABEL[tool] || null
+      if (label) {
+        const lines = TOOL_LINES[label] || [`正在${label}…`]
+        // 有细节（文件名 / 关键词 / 命令）就带上，比“正在干活”具体得多
+        const line = detail ? `${label} · ${detail}` : lines[Math.floor(Math.random() * lines.length)]
+        try { bubble?.show(line, { state, owner: 'agent' }) } catch {}
+      }
+    }
+    lastToolKey = toolKey
     // 状态一变，耳朵扑棱一下（小动作，不抢气泡）
     try { life?.flap(Math.random() < 0.5 ? 'L' : 'R', 0.8) } catch {}
 

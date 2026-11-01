@@ -9,7 +9,7 @@ import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen, dialog } fr
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, appendFileSync, statSync, renameSync } from 'node:fs'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
 // 控制台管道断开时（从终端/脚本启动后终端关闭）console.log 会抛 EPIPE，
@@ -28,6 +28,31 @@ const ARG_MODEL = (() => { const i = process.argv.indexOf('--model'); return i >
 const EXE_DIR = path.dirname(app.getPath('exe'))
 const MODEL_DIRS = [path.join(EXE_DIR, 'model'), path.join(ROOT, 'model')]
 
+// ---------- 启动日志：出问题时至少有一份能发回去的文件 ----------
+// 「下载后打不开」这类反馈，没有日志只能靠猜；有日志一眼能看出卡在哪一步。
+const LOG_DIR = path.join(app.getPath('userData'), 'logs')
+const LOG_FILE = path.join(LOG_DIR, 'main.log')
+function flog(...a) {
+  const line = `[${new Date().toISOString()}] ${a.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(' ')}`
+  try {
+    mkdirSync(LOG_DIR, { recursive: true })
+    const st = statSafe(LOG_FILE)
+    if (st && st.size > 1024 * 1024) renameSync(LOG_FILE, path.join(LOG_DIR, 'main.old.log'))
+    appendFileSync(LOG_FILE, line + '\n')
+  } catch {}
+  try { console.log(line) } catch {}
+}
+function statSafe(p) { try { return statSync(p) } catch { return null } }
+
+// 未捕获异常：写日志 + 弹一个能看懂的框（带上日志路径），别让用户只看到「闪一下没了」
+process.on('uncaughtException', (e) => {
+  flog('[crash] uncaughtException', e?.stack || String(e))
+  try { dialog.showErrorBox('桌宠出错了', `\n${e?.message || e}\n\n日志：${LOG_FILE}\n把这份日志发给我就能定位。`) } catch {}
+})
+process.on('unhandledRejection', (e) => {
+  flog('[crash] unhandledRejection', (e && (e.stack || e.message)) || String(e))
+})
+
 /** 目录里挑一个 *.model3.json：优先「大肥鱼」，否则第一个 */
 function pickModelIn(dir) {
   try {
@@ -44,8 +69,13 @@ function fromSettings() {
   return existsSync(abs) ? abs : null
 }
 
-/** 解析模型路径：设置 → exe 旁 model/ → 包内 resources/app/model → 环境变量 */
+/** 解析模型路径：命令行 --model → 设置 → exe 旁 model/ → 包内 resources/app/model → 环境变量 */
 function resolveModel() {
+  if (ARG_MODEL) {
+    const abs = path.isAbsolute(ARG_MODEL) ? ARG_MODEL : path.resolve(process.cwd(), ARG_MODEL)
+    if (existsSync(abs)) return abs
+    flog('[model] --model 参数指向的文件不存在：', abs)
+  }
   const fromCfg = fromSettings()
   if (fromCfg) return fromCfg
   for (const dir of MODEL_DIRS) { const f = pickModelIn(dir); if (f) return f }
@@ -53,16 +83,9 @@ function resolveModel() {
   return null
 }
 
-/** 启动时拿模型：找不到就弹选择框（发布包不带模型）；取消返回 null */
+/** 启动时拿模型：找不到就返回 null（由首次运行引导页处理，不再弹选择框后闪退） */
 async function resolveModelOrPick() {
-  const found = resolveModel()
-  if (found) return found
-  const r = await dialog.showOpenDialog({
-    title: '选择 Live2D 模型（.model3.json）',
-    properties: ['openFile'],
-    filters: [{ name: 'Live2D 模型', extensions: ['model3.json'] }],
-  })
-  return r.canceled ? null : (r.filePaths[0] || null)
+  return resolveModel()
 }
 
 const DEFAULTS = {
@@ -161,6 +184,16 @@ async function createWindow() {
   })
   win.setBackgroundColor('#00000000')
   win.once('ready-to-show', () => win.show())
+  // 渲染层报错 / 加载失败 / 渲染进程崩了：都写进日志，下次「打不开」有据可查
+  win.webContents.on('console-message', (...a) => {
+    const o = a[0] && typeof a[0] === 'object' && 'message' in a[0]
+      ? a[0] : { level: a[1], message: a[2], lineNumber: a[3], sourceId: a[4] }
+    const lv = o.level
+    if (lv === 'error' || lv === 3 || lv === 'warning') flog('[renderer]', `[${lv}]`, String(o.message ?? ''), o.sourceId || '')
+  })
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => flog('[load] 失败', code, desc, url))
+  win.webContents.on('render-process-gone', (_e, d) => flog('[renderer] 进程退出', d))
+  win.webContents.on('preload-error', (_e, p, err) => flog('[preload] 失败', p, err?.message || String(err)))
   // 拖动的「收尾」不能只靠渲染层发 drag-end：页面重载/失焦时那个事件不会来，
   // 定时器会残留并持续把窗口拽向光标。
   win.webContents.on('did-start-loading', stopWindowDrag)
@@ -226,6 +259,7 @@ function startAgentStatusFeed(target) {
         state: snap.state ?? null,
         task: snap.task ?? null,
         tool: snap.tool ?? null,
+        detail: snap.detail ?? null,
         at: at || Date.now(),
       })
     } catch {}
@@ -497,17 +531,99 @@ function stopCursorFeed() {
   cursorTimer = null
 }
 
+// ---------- 首次运行引导 ----------
+// 发布包不带模型（版权原因），所以「刚解压、还没放模型」是最常见的第一种状态。
+// 这里不再弹系统文件框然后闪退，而是开一个小窗口把话说清楚：模型要自己放。
+async function createFirstRunWindow() {
+  wireFirstRunIpc()
+  win = new BrowserWindow({
+    width: 640, height: 600,
+    minWidth: 520, minHeight: 480,
+    backgroundColor: '#11151c',
+    title: '第一次运行 · 把模型放进来',
+    icon: path.join(ROOT, 'assets', 'app.ico'),
+    show: false,
+    webPreferences: {
+      preload: path.join(ROOT, 'app', 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  win.once('ready-to-show', () => win.show())
+  win.on('closed', () => { win = null })
+  await win.loadFile(path.join(ROOT, 'app', 'firstrun.html'))
+}
+
+// 引导页用到的三个动作：看路径、打开目录、选定模型（选完重启生效）
+let firstRunIpcReady = false
+function wireFirstRunIpc() {
+  if (firstRunIpcReady) return
+  firstRunIpcReady = true
+  ipcMain.handle('firstrun:paths', () => ({
+    logFile: LOG_FILE,
+    logDir: LOG_DIR,
+    modelDir: MODEL_DIRS[0],
+    exeDir: EXE_DIR,
+    version: app.getVersion(),
+  }))
+  ipcMain.handle('firstrun:open', async (_e, what = 'model') => {
+    const dir = what === 'log' ? LOG_DIR : what === 'exe' ? EXE_DIR : MODEL_DIRS[0]
+    try { mkdirSync(dir, { recursive: true }) } catch {}
+    const err = await shell.openPath(dir)
+    if (err) { try { shell.showItemInFolder(LOG_FILE) } catch {} }
+    return { ok: !err, error: err || null, path: dir }
+  })
+  ipcMain.handle('firstrun:set-model', async (_e, p) => {
+    const abs = String(p || '').trim().replace(/^"|"$/g, '')
+    if (!abs || !existsSync(abs)) return { ok: false, error: '这个路径不存在：' + abs }
+    if (!abs.toLowerCase().endsWith('.model3.json')) return { ok: false, error: '请选 .model3.json 文件（不是 moc3）' }
+    settings.model = abs
+    await saveSettings()
+    flog('[firstrun] 选定模型：', abs)
+    setTimeout(() => { app.relaunch(); app.exit(0) }, 150)
+    return { ok: true, model: abs }
+  })
+  ipcMain.handle('firstrun:choose', async () => {
+    const r = await dialog.showOpenDialog(win || undefined, {
+      title: '选择 Live2D 模型（.model3.json）',
+      properties: ['openFile'],
+      filters: [{ name: 'Live2D 模型', extensions: ['model3.json'] }],
+    })
+    if (r.canceled || !r.filePaths[0]) return { ok: false }
+    settings.model = r.filePaths[0]
+    await saveSettings()
+    flog('[firstrun] 选择模型：', settings.model)
+    setTimeout(() => { app.relaunch(); app.exit(0) }, 150)
+    return { ok: true, model: settings.model }
+  })
+}
+
 // ---------- 生命周期 ----------
 app.whenReady().then(async () => {
   await loadSettings()
+  flog('[boot]', {
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    exe: process.execPath,
+    userData: app.getPath('userData'),
+    modelDirs: MODEL_DIRS,
+  })
   settings.model = await resolveModelOrPick()
   if (!settings.model) {
-    dialog.showErrorBox('缺少模型', '没有找到 Live2D 模型。请重新打开程序并选择 大肥鱼.model3.json（模型不随发布包分发）。')
+    flog('[boot] 未找到模型 → 首次运行引导')
+    await createFirstRunWindow()
+    return
+  }
+  flog('[boot] 模型：', settings.model)
+  await saveSettings()
+  try {
+    srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
+  } catch (e) {
+    flog('[boot] 静态服务启动失败', e?.stack || String(e))
+    dialog.showErrorBox('启动失败', `本地服务没起来：\n${e?.message || e}\n\n日志：${LOG_FILE}`)
     app.quit()
     return
   }
-  await saveSettings()
-  srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
   await writeEndpoint()
   console.log(`[stage] ${srv.url}/app/  （窗口尺寸 A=${settings.width}×${settings.height}）`)
   wireIpc()

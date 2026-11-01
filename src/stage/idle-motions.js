@@ -35,7 +35,7 @@ function sample(keys, p) {
  * 动作库。数值是**角度增量**（度），会加到姿态总线上。
  * `face` 可选：开始播放时顺带戳一下 idle-faces 的预设（笑 / 吐舌头 …）。
  */
-const ROUTINES = {
+export const ROUTINES = {
   重心换脚: {
     ms: 5200,
     lines: ['站久了…换个脚。', '嗯…这边舒服点。'],

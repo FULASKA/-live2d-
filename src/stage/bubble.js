@@ -32,6 +32,13 @@ export function createBubble({ el, anchor, side = 'right', corner = false, onSpe
   // 与窗口/角色同一比例：窗口变大，气泡的字号、内边距、尾巴一起变大
   let scale = 1
   el.style.setProperty('--bs', '1')
+  // 表情包配图：AI 发图时由 renderer 传 /api/meme/<名>，图在上、字在下
+  let lastImage = ''
+  const imgEl = document.createElement('img')
+  imgEl.className = 'bubble-img'
+  imgEl.alt = ''
+  imgEl.draggable = false
+  imgEl.addEventListener('load', () => { if (visible) { layout(lastText); place() } })
 
   const viewport = () => ({ w: window.innerWidth, h: window.innerHeight })
 
@@ -125,13 +132,20 @@ export function createBubble({ el, anchor, side = 'right', corner = false, onSpe
 
   return {
     /** 换文字（不闪不重建）；state 用来染色：thinking / working / waiting / success / error */
-    set(text, { state: st } = {}) {
+    set(text, { state: st, image } = {}) {
       const t = String(text ?? '')
       if (st) el.dataset.state = st
-      if (t === lastText) { if (visible) place(); return }
+      const img = image === undefined ? lastImage : String(image || '')
+      if (t === lastText && img === lastImage) { if (visible) place(); return }
       lastText = t
+      lastImage = img
       el.textContent = t
-      el.classList.toggle('empty', t.length === 0)
+      // textContent 会把图节点一起清掉，所以设完字再把图放回去（节点保留，src 复用缓存）
+      if (lastImage) {
+        if (imgEl.getAttribute('src') !== lastImage) imgEl.src = lastImage
+        el.prepend(imgEl)
+      }
+      el.classList.toggle('empty', t.length === 0 && !lastImage)
       if (visible) { layout(t); place() }
     },
     show(text, opts = {}) {

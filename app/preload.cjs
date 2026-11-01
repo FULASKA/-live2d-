@@ -2,7 +2,7 @@
 //
 // 三个页面共用这一份：舞台（覆盖层）/ 设置窗口 / 动作编辑器。
 // 舞台窗口额外提供「全局光标 + DSH 状态 + 穿透」；设置窗口只用到 get/set/stageRpc。
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('shell', {
   // ---- 设置（主进程持有，改动会广播给所有窗口）----
@@ -13,6 +13,15 @@ contextBridge.exposeInMainWorld('shell', {
   // ---- 舞台窗口的指令通道（设置窗口用它改反应、读快照、导出补丁）----
   stageRpc: (op, payload) => ipcRenderer.invoke('stage:rpc', op, payload),
   chooseModel: () => ipcRenderer.invoke('model:choose'),
+
+  // ---- 首次运行引导（找不到模型时打开的小窗口）----
+  firstRunPaths: () => ipcRenderer.invoke('firstrun:paths'),
+  firstRunOpen: (what) => ipcRenderer.invoke('firstrun:open', what),
+  firstRunSetModel: (p) => ipcRenderer.invoke('firstrun:set-model', p),
+  firstRunChoose: () => ipcRenderer.invoke('firstrun:choose'),
+  // 拖进来的文件拿真实路径（Electron 32+ 不再允许直接读 File.path）
+  pathForFile: (f) => { try { return webUtils.getPathForFile(f) } catch { return '' } },
+
 
   // ---- 窗口搬运 / 尺寸 / 轮廓 ----
   dragBegin: () => ipcRenderer.send('win:drag-begin'),

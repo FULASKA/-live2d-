@@ -14,8 +14,16 @@
 </script>
 </head>
 <body>
+  <!-- 左：动作清单 -->
   <aside id="left">
     <header>动作</header>
+    <div class="fields">
+      <label>名称<input id="act-name" placeholder="动作名"></label>
+      <label>时长<input id="act-dur" type="number" min="100" step="50" value="1200"><span class="unit">ms</span></label>
+      <label class="stack">配字（一行一句，播放时随机出一句）
+        <textarea id="act-lines" rows="4" placeholder="杂鱼~杂鱼~&#10;这么简单都不会呀？"></textarea>
+      </label>
+    </div>
     <div class="row">
       <button id="act-new">新建</button>
       <button id="act-dup">复制</button>
@@ -23,37 +31,67 @@
     </div>
     <ul id="act-list"></ul>
     <div class="row">
+      <button id="act-save" class="primary" title="立即写入 actions.json（平时也会自动保存）">保存</button>
       <button id="act-export">导出 JSON</button>
       <label class="file">导入<input type="file" id="act-import" accept=".json"></label>
     </div>
-    <div class="hint">存成 userData/actions.json；触发条件先记着，后面接舞台</div>
+    <div class="hint">自动保存到 userData/actions.json；舞台加载后按触发条件播放</div>
   </aside>
 
+  <!-- 中：预览 + 视图控制 + 时间轴 -->
   <main id="mid">
-    <div id="preview"></div>
+    <div id="stage-wrap">
+      <div id="preview"><div id="preview-hint">拖动移动 · 滚轮缩放 · 双击复位</div></div>
+      <div id="line-bubble"></div>
+
+      <div id="viewbar">
+        <div class="vb-group">
+          <span class="vb-label">大小</span>
+          <input type="range" id="v-zoom" min="0.3" max="3" step="0.01" value="1">
+          <i id="v-zoom-out">1.00×</i>
+        </div>
+        <div class="vb-group">
+          <span class="vb-label">左右</span>
+          <input type="range" id="v-x" min="-1" max="1" step="0.005" value="0">
+          <i id="v-x-out">0.00</i>
+        </div>
+        <div class="vb-group">
+          <span class="vb-label">上下</span>
+          <input type="range" id="v-y" min="-1" max="1" step="0.005" value="0">
+          <i id="v-y-out">0.00</i>
+        </div>
+        <button id="v-reset" title="回到居中、1.00×">复位</button>
+      </div>
+    </div>
+
     <div id="timeline">
       <div class="row">
-        <button id="play">▶ 播放</button>
+        <button id="play" class="primary">▶ 播放</button>
         <button id="add-key">＋ 关键帧</button>
-        <button id="del-key">删除关键帧</button>
-        <span id="time-readout">0 / 0 ms</span>
+        <button id="del-key">删关键帧</button>
+        <button id="copy-key" title="复制当前时间的关键帧（或此刻的值）">复制帧</button>
+        <button id="paste-key" title="把复制的值粘到当前时间">粘贴帧</button>
+        <span id="key-state" class="tag">无关键帧</span>
+        <span id="time-readout">0 / 1200 ms</span>
       </div>
       <input type="range" id="time" min="0" max="1200" step="10" value="0">
       <div id="keys"></div>
     </div>
   </main>
 
+  <!-- 右：参数 -->
   <aside id="right">
-    <header>参数</header>
+    <header>参数 <small id="param-count"></small></header>
     <div class="row">
       <input id="param-search" placeholder="搜参数名 / Id">
-      <button id="add-param">＋</button>
     </div>
-    <div id="param-active"></div>
-    <div class="hint">选中的参数会出现在上方；滑块改的是「当前关键帧」的值</div>
+    <div class="section-label">已选（拖动即写入当前关键帧）</div>
+    <div id="param-active"><div class="empty">还没有参数：在下面列表点一个</div></div>
+    <div class="section-label">全部参数</div>
     <ul id="param-list"></ul>
   </aside>
 
+  <div id="toast"></div>
   <script type="module" src="./editor.js"></script>
 </body>
 </html>

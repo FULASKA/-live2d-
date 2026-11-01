@@ -137,8 +137,10 @@ function applyAction(msg) {
   switch (action) {
     case 'say': {
       const text = String(a.text ?? '')
-      if (!text || !state.bubble) break
-      state.bubble.show(text, { state: a.state || 'idle' })
+      if ((!text && !a.image) || !state.bubble) break
+      const image = a.image ? `/api/meme/${encodeURIComponent(String(a.image))}` : ''
+      // owner:'agent' —— 显式指令要能顶掉「工作状态」气泡（否则 agent 干活期间这句话说不出来）
+      state.bubble.show(text, { state: a.state || 'idle', image, owner: 'agent' })
       state.agentLink?.cancelHide?.()
       const ms = Number(a.ms ?? 0)
       // 显式指令优先于「工作状态」气泡：否则 DSH 状态轮询两秒后就把这句话盖掉
@@ -174,6 +176,8 @@ function applyAction(msg) {
       break
     }
     case 'state': {
+      // 显式台词还没到期：状态联动别盖掉它（回合结束时桥接先说总结，状态更新往往晚到）
+      if (performance.now() < (state.busOwnUntil || 0)) break
       // 复用 DSH 联动那条路：气泡文案 / 表情 / 小动作的映射都在 agent-link.js
       state.agentLink?.apply({ state: a.state ?? null, at: Date.now(), task: a.task ?? null })
       break

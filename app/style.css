@@ -73,6 +73,16 @@ body { font: 12px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; col
   scrollbar-width: thin; scrollbar-color: rgba(70, 105, 165, 0.45) transparent;
 }
 #bubble.on { opacity: 1; transform: none; }
+/* 表情包配图（AI 发图时）：图在上、字在下，等比缩到气泡宽度内 */
+#bubble img.bubble-img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(150px * var(--bs));
+  margin: 0 auto calc(6px * var(--bs));
+  border-radius: calc(12px * var(--bs));
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
 #bubble.empty { display: none; }
 #bubble::-webkit-scrollbar { width: 6px; }
 #bubble::-webkit-scrollbar-thumb { background: rgba(70, 105, 165, 0.4); border-radius: 3px; }
