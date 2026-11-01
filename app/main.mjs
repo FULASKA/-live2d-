@@ -5,11 +5,12 @@
 //   - 窗口尺寸 A 与模型尺寸 B 分离：A 改窗口大小，B 只改模型缩放（渲染层 zoom），互不牵连
 //   - 穿透模式：win.setIgnoreMouseEvents(true, { forward: true })，用全局快捷键 Ctrl+Alt+L 找回
 //   - 退出：Ctrl+Alt+Q（穿透态下也能用）
-import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, globalShortcut, shell, screen, dialog, Menu } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises'
-import { existsSync, mkdirSync, readdirSync, appendFileSync, statSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, appendFileSync, statSync, renameSync, readFileSync, writeFileSync, openSync, readSync, closeSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { createStageServer } from '../src/server/stage-server.mjs'
 
 // 控制台管道断开时（从终端/脚本启动后终端关闭）console.log 会抛 EPIPE，
@@ -43,6 +44,30 @@ function flog(...a) {
   try { console.log(line) } catch {}
 }
 function statSafe(p) { try { return statSync(p) } catch { return null } }
+
+// ---------- 崩溃自愈：上次没成功起来 → 这次自动进安全模式 ----------
+// 反馈里「双击闪一下就没、退出码主动中止、连窗口都没有」基本都是显卡/透明窗口的驱动兼容问题。
+// 用启动标记判断：上一次启动没走到「窗口显示」就结束了，这一次就关掉硬件加速重试。
+// 成功启动一次后标记置 true，下次自动恢复正常模式（有毛病也只是降级一次，不会永远降级）。
+const BOOT_FILE = path.join(app.getPath('userData'), 'boot.json')
+const ARG_SAFE = process.argv.includes('--safe') || process.env.STAGE_SAFE === '1'
+let lastBoot = { ok: true, tries: 0 }
+try { lastBoot = { ...lastBoot, ...JSON.parse(readFileSync(BOOT_FILE, 'utf8')) } } catch {}
+const crashLastTime = lastBoot.ok === false
+const SAFE = ARG_SAFE || crashLastTime
+const bootTries = Number(lastBoot.tries || 0) + 1
+try {
+  writeFileSync(BOOT_FILE, JSON.stringify({ ok: false, safe: SAFE, tries: bootTries, startedAt: Date.now() }, null, 2))
+} catch {}
+if (SAFE) {
+  try { app.disableHardwareAcceleration() } catch {}
+  for (const sw of ['disable-gpu-compositing', 'disable-direct-composition', 'disable-gpu-shader-disk-cache']) {
+    try { app.commandLine.appendSwitch(sw) } catch {}
+  }
+}
+function bootFinished() {
+  try { writeFileSync(BOOT_FILE, JSON.stringify({ ok: true, safe: SAFE, tries: bootTries, at: Date.now() }, null, 2)) } catch {}
+}
 
 // 未捕获异常：写日志 + 弹一个能看懂的框（带上日志路径），别让用户只看到「闪一下没了」
 process.on('uncaughtException', (e) => {
@@ -88,6 +113,69 @@ async function resolveModelOrPick() {
   return resolveModel()
 }
 
+// ---------- 贴图自动压缩：常驻软件不该一开机就吃 2GB ----------
+// 模型的 4096/8192 图集解压后是 592MB 级别（8192² 单张就 256MB），缩到 2048 后 64MB。
+// 这是**默认流程**：首次启动发现贴图过大就自动压一次（约 10 秒），之后一直用 _opt2048 副本。
+// 跳过：环境变量 STAGE_NO_SHRINK=1；想重跑：双击「贴图压缩.cmd」。
+const MAX_TEX = 2048
+
+/** 只读 PNG 头拿宽高（不解码） */
+function pngSize(file) {
+  try {
+    const fd = openSync(file, 'r')
+    const b = Buffer.alloc(24)
+    readSync(fd, b, 0, 24, 0)
+    closeSync(fd)
+    if (b.readUInt32BE(0) !== 0x89504e47) return null
+    return [b.readUInt32BE(16), b.readUInt32BE(20)]
+  } catch { return null }
+}
+
+/** 找出模型里第一张超过 MAX_TEX 的贴图 */
+function oversizedTexture(modelFile) {
+  try {
+    const j = JSON.parse(readFileSync(modelFile, 'utf8'))
+    for (const rel of j?.FileReferences?.Textures || []) {
+      const p = path.resolve(path.dirname(modelFile), rel)
+      if (!existsSync(p)) continue
+      const s = pngSize(p)
+      if (s && Math.max(s[0], s[1]) > MAX_TEX) return { rel, w: s[0], h: s[1] }
+    }
+  } catch (e) { flog('[opt] 读模型失败', String(e?.message || e)) }
+  return null
+}
+
+async function createSplashWindow() {
+  const splash = new BrowserWindow({
+    width: 430, height: 136, frame: false, resizable: false,
+    alwaysOnTop: true, skipTaskbar: true, backgroundColor: '#11151c', show: false,
+  })
+  await splash.loadFile(path.join(ROOT, 'app', 'optimizing.html'))
+  splash.once('ready-to-show', () => splash.show())
+  return splash
+}
+
+/** 调 tools/shrink-textures.ps1；成功后脚本自己把 settings.json 的 model 指到副本 */
+async function autoShrinkTextures(modelFile) {
+  const script = path.join(ROOT, 'tools', 'shrink-textures.ps1')
+  if (!existsSync(script)) { flog('[opt] 缺 tools/shrink-textures.ps1，跳过压缩'); return false }
+  flog('[opt] 开始压缩贴图：', modelFile)
+  const splash = await createSplashWindow().catch(() => null)
+  try {
+    const code = await new Promise((resolve) => {
+      let out = ''
+      const cp = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Model', modelFile, '-NoLaunch'], { windowsHide: true, env: { ...process.env, STAGE_UTF8: '1' } })
+      cp.stdout?.on('data', (d) => { out += String(d) })
+      cp.stderr?.on('data', (d) => { out += String(d) })
+      const timer = setTimeout(() => { flog('[opt] 超时，放弃'); try { cp.kill() } catch {} resolve(-1) }, 180000)
+      cp.on('error', (e) => { clearTimeout(timer); flog('[opt] 启动脚本失败', String(e?.message || e)); resolve(-2) })
+      cp.on('close', (c) => { clearTimeout(timer); flog('[opt] 退出码', c); if (out) flog('[opt] 输出', out.slice(-600)); resolve(c) })
+    })
+    return code === 0
+  } finally { try { splash?.destroy() } catch {} }
+}
+
+
 const DEFAULTS = {
   width: 520,
   height: 760,
@@ -115,6 +203,8 @@ const DEFAULTS = {
 
 let settings = { ...DEFAULTS }
 let win = null
+// 启动阶段（引导窗口 / 压缩贴图 splash 关闭时）不该触发「窗口全关 → 退出」
+let bootGuard = true
 let srv = null
 let token = 'local-app'
 
@@ -183,7 +273,11 @@ async function createWindow() {
     },
   })
   win.setBackgroundColor('#00000000')
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    win.show()
+    // 窗口真的显示出来了才算「启动成功」，否则下次启动继续走安全模式
+    setTimeout(bootFinished, 2500)
+  })
   // 渲染层报错 / 加载失败 / 渲染进程崩了：都写进日志，下次「打不开」有据可查
   win.webContents.on('console-message', (...a) => {
     const o = a[0] && typeof a[0] === 'object' && 'message' in a[0]
@@ -549,8 +643,15 @@ async function createFirstRunWindow() {
       nodeIntegration: false,
     },
   })
-  win.once('ready-to-show', () => win.show())
-  win.on('closed', () => { win = null })
+  win.once('ready-to-show', () => {
+    // 引导是一次性的设置窗口：置顶 + 抢焦点，否则开在别的窗口后面等于「双击没反应」
+    try { win.setAlwaysOnTop(true, 'screen-saver') } catch {}
+    win.show()
+    try { win.focus(); win.moveTop() } catch {}
+    setTimeout(bootFinished, 2000)
+  })
+  win.setMenuBarVisibility(false)
+  win.on('closed', () => { win = null; bootGuard = false; try { app.quit() } catch {} })
   await win.loadFile(path.join(ROOT, 'app', 'firstrun.html'))
 }
 
@@ -600,6 +701,8 @@ function wireFirstRunIpc() {
 
 // ---------- 生命周期 ----------
 app.whenReady().then(async () => {
+  // 桌宠不装箱单式菜单：引导窗口带边框，默认菜单会在顶上露一条 File/Edit/View
+  try { Menu.setApplicationMenu(null) } catch {}
   await loadSettings()
   flog('[boot]', {
     version: app.getVersion(),
@@ -607,6 +710,9 @@ app.whenReady().then(async () => {
     exe: process.execPath,
     userData: app.getPath('userData'),
     modelDirs: MODEL_DIRS,
+    safeMode: SAFE,
+    crashLastTime,
+    tries: bootTries,
   })
   settings.model = await resolveModelOrPick()
   if (!settings.model) {
@@ -615,6 +721,25 @@ app.whenReady().then(async () => {
     return
   }
   flog('[boot] 模型：', settings.model)
+  // 贴图过大 → 自动压一次（默认流程）。已经压过、或用 STAGE_NO_SHRINK 跳过的不重复
+  if (!process.env.STAGE_NO_SHRINK && !/_opt\d+/i.test(settings.model || '')) {
+    const big = oversizedTexture(settings.model)
+    if (big) {
+      flog('[opt] 发现超大贴图', big.rel, `${big.w}x${big.h}`)
+      const ok = await autoShrinkTextures(settings.model)
+      if (ok) { await loadSettings(); flog('[opt] 压缩完成，改用：', settings.model) }
+      else flog('[opt] 压缩失败，继续用原模型（内存会偏高）')
+    }
+  }
+  // 系统 / 显卡：排查「他那边打不开」时最有用的两行
+  try {
+    const gpu = await app.getGPUInfo('basic')
+    flog('[sys]', {
+      os: process.getSystemVersion(), arch: process.arch, electron: process.versions.electron,
+      gpu: (gpu?.gpuDevice || []).map((d) => `${d.vendorString || d.vendorId || '?'} ${d.deviceString || ''}`.trim()),
+      gl: gpu?.auxAttributes?.glRenderer || null,
+    })
+  } catch (e) { flog('[sys] GPU 信息读取失败', String(e?.message || e)) }
   await saveSettings()
   try {
     srv = await createStageServer({ root: ROOT, model: settings.model, token, port: 0 })
@@ -632,6 +757,15 @@ app.whenReady().then(async () => {
   wireWindowDrag()
   startCursorFeed()
   await createWindow()
+  bootGuard = false
+  // 详细显卡名要等 GPU 进程（'complete' 会阻塞），放到窗口起来之后补记，不挡启动
+  setTimeout(async () => {
+    try {
+      const full = await app.getGPUInfo('complete')
+      const d = (full?.gpuDevice || [])[0] || {}
+      flog('[sys] gpu:', `${d.vendorString || ''} ${d.deviceString || ''}`.trim() || '未知', 'driver:', d.driverVersion || '?', 'features:', app.getGPUFeatureStatus())
+    } catch (e) { flog('[sys] gpu 详情读取失败', String(e?.message || e)) }
+  }, 3000)
 
   // 穿透态找回 / 退出：全局快捷键，即使窗口在忽略鼠标也能用
   globalShortcut.register('Control+Alt+L', () => {
@@ -646,6 +780,8 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
+  // 启动阶段还会开临时窗口（压缩贴图的 splash）：它关掉不代表程序该退出
+  if (bootGuard) return
   stopCursorFeed()
   globalShortcut.unregisterAll()
   srv?.close?.()

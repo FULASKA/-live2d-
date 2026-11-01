@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>正在压缩贴图</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(600px 300px at 30% 0%, #1b2637 0%, transparent 70%), #11151c;
+    color: #e8eef7;
+    font: 13px/1.6 "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; justify-content: center; gap: 10px;
+    padding: 0 26px; -webkit-user-select: none;
+  }
+  .t { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+  .s { color: #93a1b3; font-size: 12px; }
+  .bar { height: 4px; border-radius: 3px; background: #1d2836; overflow: hidden; }
+  .bar i {
+    display: block; height: 100%; width: 40%; border-radius: 3px;
+    background: linear-gradient(90deg, #4aa8ff, #6fd2ff);
+    animation: slide 1.2s ease-in-out infinite;
+  }
+  @keyframes slide { 0% { transform: translateX(-100%) } 100% { transform: translateX(250%) } }
+</style>
+</head>
+<body>
+  <div class="t">首次启动：正在压缩模型贴图</div>
+  <div class="s">把 4096 / 8192 的大图缩到 2048，内存能从约 2GB 降到 0.6GB。只需一次，约 10 秒。</div>
+  <div class="bar"><i></i></div>
+</body>
+</html>

@@ -8,7 +8,7 @@
 //   2. 不要先拷到中转目录再打包：依赖遍历器（flora-colossus）在「带 node_modules 的外置目录」上
 //      解析不到自己的包，会报 Failed to locate module。直接在根目录打最稳。
 //   3. 打完必须自检关键 vendor 文件在不在（见 assertVendor），别让黑窗口流到桌面。
-import { rm, stat, access, cp } from 'node:fs/promises'
+import { rm, stat, access, cp, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { packager } from '@electron/packager'
@@ -93,8 +93,20 @@ async function main() {
   // 把「挂载模型.cmd」「贴图压缩.cmd」放到 exe 旁边（用户可直接拖模型上去 / 一键缩贴图）
   try { await cp(path.join(ROOT, '挂载模型.cmd'), path.join(appDir, '挂载模型.cmd')) } catch {}
   try { await cp(path.join(ROOT, '贴图压缩.cmd'), path.join(appDir, '贴图压缩.cmd')) } catch {}
+  try { await cp(path.join(ROOT, '兼容模式.cmd'), path.join(appDir, '兼容模式.cmd')) } catch {}
+  try { await cp(path.join(ROOT, '诊断.cmd'), path.join(appDir, '诊断.cmd')) } catch {}
+  // 说明书跟着包走：让 AI 接手安装时，目录里就有可读的步骤和排查表
+  try { await cp(path.join(ROOT, 'README.md'), path.join(appDir, '使用说明.md')) } catch {}
+  try { await cp(path.join(ROOT, 'tools', 'diagnose.ps1'), path.join(appDir, 'tools', 'diagnose.ps1')) } catch {}
   try {
     await cp(path.join(ROOT, 'tools', 'shrink-textures.ps1'), path.join(appDir, 'tools', 'shrink-textures.ps1'))
+    // PowerShell 5.1 读无 BOM 的文件会按 GBK 解析，中文注释直接变语法错误
+    const ps = path.join(appDir, 'tools', 'shrink-textures.ps1')
+    const buf = await readFile(ps)
+    if (!(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf)) {
+      await writeFile(ps, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), buf]))
+      console.log('[pack] 已给 shrink-textures.ps1 补 UTF-8 BOM')
+    }
     console.log('[pack] 已带上 tools/shrink-textures.ps1')
   } catch (e) { console.warn('[pack] 贴图压缩脚本拷贝失败：', e.message) }
 

@@ -19,6 +19,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+# 被桌宠主程序调用时（STAGE_UTF8=1）改输出 UTF-8，主进程按 UTF-8 记日志就不会乱码；
+# 用户自己在 cmd 里双击时保持控制台默认（GBK），中文显示正常。
+if ($env:STAGE_UTF8 -eq '1') { try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {} }
 
 function Fail($msg) { Write-Host "[失败] $msg" -ForegroundColor Red; exit 1 }
 
